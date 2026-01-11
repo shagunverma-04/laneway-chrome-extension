@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Laneway Meeting Recorder</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="logo">
+        <span class="logo-icon">🎥</span>
+        <h1>Laneway</h1>
+      </div>
+      <div class="auth-status" id="auth-status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="user-email">Not logged in</span>
+      </div>
+    </div>
+
+    <!-- Meeting Status -->
+    <div class="meeting-status" id="meeting-status">
+      <div class="status-card">
+        <div class="status-icon" id="meeting-icon">📅</div>
+        <div class="status-info">
+          <div class="status-label">Meeting Status</div>
+          <div class="status-value" id="meeting-status-text">No active meeting</div>
+          <div class="meeting-title" id="meeting-title"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recording Controls -->
+    <div class="recording-section" id="recording-section">
+      <div class="recording-status" id="recording-status">
+        <div class="recording-indicator">
+          <span class="recording-dot" id="recording-dot"></span>
+          <span id="recording-text">Not Recording</span>
+        </div>
+        <div class="recording-time" id="recording-time">00:00:00</div>
+      </div>
+
+      <div class="controls">
+        <button class="btn btn-primary" id="record-btn">
+          <span class="btn-icon">⏺</span>
+          <span class="btn-text">Start Recording</span>
+        </button>
+      </div>
+
+      <!-- Quality Settings -->
+      <div class="settings-group">
+        <label for="quality-select">Recording Quality</label>
+        <select id="quality-select" class="select-input">
+          <option value="audio-only">Audio Only (Recommended)</option>
+          <option value="720p">720p Video</option>
+          <option value="1080p">1080p Video</option>
+        </select>
+      </div>
+
+      <!-- Auto-start Toggle -->
+      <div class="toggle-group">
+        <label class="toggle-label">
+          <input type="checkbox" id="auto-start-toggle" class="toggle-input">
+          <span class="toggle-slider"></span>
+          <span class="toggle-text">Auto-start recording</span>
+        </label>
+      </div>
+
+      <!-- Participant Tracking Toggle -->
+      <div class="toggle-group">
+        <label class="toggle-label">
+          <input type="checkbox" id="participant-tracking-toggle" class="toggle-input" checked>
+          <span class="toggle-slider"></span>
+          <span class="toggle-text">Track participant behavior</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Absence Notification -->
+    <div class="absence-section" id="absence-section" style="display: none;">
+      <div class="section-header">
+        <h3>Cannot Attend?</h3>
+        <p>Notify your team in advance</p>
+      </div>
+
+      <div class="form-group">
+        <label for="absence-type">Reason Type</label>
+        <select id="absence-type" class="select-input">
+          <option value="">Select reason type</option>
+          <option value="sick">🤒 Sick Leave</option>
+          <option value="vacation">🏖️ Vacation</option>
+          <option value="conflict">📅 Schedule Conflict</option>
+          <option value="emergency">🚨 Emergency</option>
+          <option value="other">📝 Other</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="absence-reason">Explanation</label>
+        <textarea 
+          id="absence-reason" 
+          class="textarea-input"
+          placeholder="Explain your absence (will be shown to team)..."
+          rows="3"
+        ></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="absence-duration">Duration</label>
+        <select id="absence-duration" class="select-input">
+          <option value="all_meeting">Entire Meeting</option>
+          <option value="first_30min">First 30 minutes</option>
+          <option value="joining_late">Joining Late</option>
+        </select>
+      </div>
+
+      <button class="btn btn-secondary" id="submit-absence-btn">
+        <span class="btn-icon">📨</span>
+        <span class="btn-text">Notify Team</span>
+      </button>
+
+      <div class="status-message" id="absence-status"></div>
+    </div>
+
+    <!-- Statistics -->
+    <div class="stats-section" id="stats-section">
+      <div class="section-header">
+        <h3>Your Stats</h3>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="meetings-count">0</div>
+          <div class="stat-label">Meetings This Week</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="speaking-time">0m</div>
+          <div class="stat-label">Avg Speaking Time</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="camera-usage">0%</div>
+          <div class="stat-label">Camera Usage</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Login Section (shown when not authenticated) -->
+    <div class="login-section" id="login-section" style="display: none;">
+      <div class="login-card">
+        <h2>Welcome to Laneway</h2>
+        <p>Please log in to start recording meetings</p>
+        
+        <div class="form-group">
+          <label for="login-email">Email</label>
+          <input type="email" id="login-email" class="text-input" placeholder="your@email.com">
+        </div>
+        
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" class="text-input" placeholder="••••••••">
+        </div>
+        
+        <button class="btn btn-primary" id="login-btn">
+          <span class="btn-text">Log In</span>
+        </button>
+        
+        <div class="status-message" id="login-status"></div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <a href="#" id="dashboard-link" class="footer-link">View Dashboard</a>
+      <a href="#" id="settings-link" class="footer-link">Settings</a>
+      <a href="#" id="logout-link" class="footer-link">Logout</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

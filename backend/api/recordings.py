@@ -7,11 +7,26 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 import uuid
+import sys
+from pathlib import Path
+
+# Add parent directory to path to import storage module
+sys.path.append(str(Path(__file__).parent.parent))
 
 from api.auth import verify_token
 from database import execute_query, execute_insert
+from storage.r2_storage import R2Storage
 
 router = APIRouter()
+
+# Initialize R2 storage
+try:
+    r2_storage = R2Storage()
+    print("✅ R2 Storage initialized")
+except Exception as e:
+    print(f"⚠️ R2 Storage initialization failed: {e}")
+    print("   Falling back to local storage")
+    r2_storage = None
 
 class UploadUrlRequest(BaseModel):
     meetingId: str
@@ -45,8 +60,7 @@ async def get_upload_url(
     authorization: str = Header(None)
 ):
     """
-    Generate upload URL for recording
-    For now, we'll use local storage instead of S3
+    Generate presigned upload URL for recording to R2
     """
     # Verify authentication
     user = verify_token(authorization)
@@ -54,14 +68,24 @@ async def get_upload_url(
     # Generate unique recording ID
     recording_id = f"recording_{request.meetingId}_{int(datetime.now().timestamp())}"
     
-    # For local development, we'll use a local file path
-    # In production, you would generate a presigned S3 URL here
-    upload_url = f"local://recordings/{recording_id}.webm"
+    # Generate R2 presigned upload URL
+    if r2_storage:
+        try:
+            upload_url, storage_key = r2_storage.generate_upload_url(recording_id)
+            print(f"✅ Generated R2 upload URL for {recording_id}")
+        except Exception as e:
+            print(f"❌ Failed to generate R2 URL: {e}")
+            upload_url = f"local://recordings/{recording_id}.webm"
+            storage_key = f"recordings/{recording_id}.webm"
+    else:
+        # Fallback to local storage
+        upload_url = f"local://recordings/{recording_id}.webm"
+        storage_key = f"recordings/{recording_id}.webm"
     
     # Store recording metadata in database
     execute_insert(
-        "INSERT INTO meeting_recordings (id, meeting_id, status) VALUES (?, ?, ?)",
-        (recording_id, request.meetingId, 'uploading')
+        "INSERT INTO meeting_recordings (id, meeting_id, storage_key, status) VALUES (?, ?, ?, ?)",
+        (recording_id, request.meetingId, storage_key, 'uploading')
     )
     
     return UploadUrlResponse(

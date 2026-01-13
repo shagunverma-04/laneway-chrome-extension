@@ -230,11 +230,28 @@ async function handleRecordToggle() {
     try {
         if (currentState.isRecording) {
             // Stop recording
+            // First, get participant data from content script
+            let participants = [];
+            try {
+                const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                if (tab && tab.url && tab.url.includes('meet.google.com')) {
+                    const participantResponse = await chrome.tabs.sendMessage(tab.id, {
+                        type: 'GET_PARTICIPANTS'
+                    });
+                    if (participantResponse && participantResponse.participants) {
+                        participants = participantResponse.participants;
+                        console.log('Retrieved participant data:', participants.length, 'participants');
+                    }
+                }
+            } catch (participantError) {
+                console.warn('Could not retrieve participant data:', participantError);
+            }
+
             const response = await chrome.runtime.sendMessage({
                 type: 'STOP_RECORDING',
                 data: {
                     metadata: currentState.meetingInfo,
-                    participants: []
+                    participants: participants
                 }
             });
 

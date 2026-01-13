@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS meeting_recordings (
     id TEXT PRIMARY KEY,
     meeting_id TEXT NOT NULL,
     s3_key TEXT,
+    storage_key TEXT,  -- R2/S3 storage key
     status TEXT DEFAULT 'uploading',  -- 'uploading', 'processing', 'completed', 'failed'
     duration INTEGER,
     file_size INTEGER,

@@ -413,7 +413,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 participantCount: meetingState.participants.size
             });
             break;
+
+        case 'GET_PARTICIPANTS':
+            // Return participant data for recording completion
+            const participants = Array.from(meetingState.participants.values()).map(p => ({
+                id: p.id,
+                name: p.name,
+                email: p.email || null,
+                joinTime: p.joinTime,
+                cameraOn: p.cameraOn,
+                audioMuted: p.audioMuted,
+                cameraOnDuration: p.cameraOnDuration,
+                speakingEvents: p.speakingEvents || []
+            }));
+            console.log('Returning participant data:', participants.length, 'participants');
+            sendResponse({ participants });
+            break;
     }
+    return true; // Keep message channel open for async responses
 });
 
 // Handle recording started
@@ -422,59 +439,177 @@ async function handleRecordingStarted(message) {
 
     try {
         // Use getDisplayMedia to capture the tab/screen
-        // IMPORTANT: User must check "Share tab audio" in the picker!
+        // Request both video and audio explicitly
         const constraints = {
             video: message.quality !== 'audio-only' ? {
                 displaySurface: "browser",
                 width: { ideal: 1920 },
                 height: { ideal: 1080 }
             } : false,
-            audio: true  // Always request audio
+            audio: {
+                echoCancellation: false,  // Disable to get raw audio
+                noiseSuppression: false,  // Disable to get raw audio
+                autoGainControl: false,   // Disable to get raw audio
+                sampleRate: 48000         // Higher sample rate for better quality
+            }
         };
 
         console.log('Requesting display media with constraints:', constraints);
 
-        // Use getDisplayMedia which is the modern, reliable way
-        const stream = await navigator.mediaDevices.getDisplayMedia(constraints);
-        console.log('✅ Got media stream:', stream);
-        console.log('   Audio tracks:', stream.getAudioTracks().length);
-        console.log('   Video tracks:', stream.getVideoTracks().length);
+        // Use getDisplayMedia
+        const displayStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+        console.log('✅ Got display stream:', displayStream);
+        console.log('   Audio tracks:', displayStream.getAudioTracks().length);
+        console.log('   Video tracks:', displayStream.getVideoTracks().length);
 
         // Check if audio is present
-        const hasAudio = stream.getAudioTracks().length > 0;
-        const hasVideo = stream.getVideoTracks().length > 0;
+        const hasAudio = displayStream.getAudioTracks().length > 0;
+        const hasVideo = displayStream.getVideoTracks().length > 0;
 
         if (!hasAudio) {
-            console.warn('⚠️ No audio track detected!');
-            const continueAnyway = confirm(
-                '⚠️ No audio detected!\n\n' +
-                'Did you check "Share tab audio" in the picker?\n\n' +
-                'Click OK to continue recording without audio, or Cancel to stop.'
-            );
+            console.warn('⚠️ No audio track detected from display!');
+            console.log('🔊 Attempting to capture system audio...');
 
-            if (!continueAnyway) {
-                stream.getTracks().forEach(track => track.stop());
-                throw new Error('Recording cancelled - no audio');
+            try {
+                // Try to get system audio via second getDisplayMedia call
+                const audioStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: false,
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                        sampleRate: 48000
+                    }
+                });
+
+                if (audioStream.getAudioTracks().length > 0) {
+                    console.log('✅ Got system audio stream!');
+
+                    // Combine video from display and audio from system
+                    const combinedStream = new MediaStream();
+                    displayStream.getVideoTracks().forEach(track => combinedStream.addTrack(track));
+                    audioStream.getAudioTracks().forEach(track => combinedStream.addTrack(track));
+
+                    const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl);
+                    await recorder.startRecording();
+
+                    meetingState.recorder = {
+                        isRecording: true,
+                        startTime: Date.now(),
+                        recordingId: message.recordingId,
+                        mediaRecorder: recorder,
+                        streams: [displayStream, audioStream]
+                    };
+
+                    console.log('✅ Recording with system audio');
+
+                    // Show recording indicator and skip to end
+                    updateRecordingIndicator(true);
+                    const recordingTimer = setInterval(() => {
+                        if (meetingState.recorder && meetingState.recorder.isRecording) {
+                            const duration = Math.floor((Date.now() - meetingState.recorder.startTime) / 1000);
+                            updateRecordingIndicator(true, duration);
+                        } else {
+                            clearInterval(recordingTimer);
+                        }
+                    }, 1000);
+
+                    return; // Exit early, recording started successfully
+                }
+            } catch (audioError) {
+                console.warn('⚠️ System audio capture failed:', audioError.message);
+            }
+
+            console.log('🎤 Attempting to capture microphone audio as fallback...');
+
+            try {
+                // Try to get microphone audio as fallback
+                const micStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                console.log('✅ Got microphone audio as fallback');
+
+                // Combine video from display and audio from microphone
+                const combinedStream = new MediaStream();
+
+                // Add video tracks from display
+                displayStream.getVideoTracks().forEach(track => {
+                    combinedStream.addTrack(track);
+                });
+
+                // Add audio tracks from microphone
+                micStream.getAudioTracks().forEach(track => {
+                    combinedStream.addTrack(track);
+                });
+
+                // Use combined stream
+                const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl);
+                await recorder.startRecording();
+
+                // Store recorder state
+                meetingState.recorder = {
+                    isRecording: true,
+                    startTime: Date.now(),
+                    recordingId: message.recordingId,
+                    mediaRecorder: recorder,
+                    streams: [displayStream, micStream]  // Keep references to stop later
+                };
+
+                console.log('✅ Recording with microphone audio (tab audio not available)');
+
+            } catch (micError) {
+                console.error('❌ Failed to get microphone audio:', micError);
+
+                const continueAnyway = confirm(
+                    '⚠️ No audio available!\n\n' +
+                    'Tab audio: Not shared\n' +
+                    'Microphone: Permission denied\n\n' +
+                    'Continue recording without audio?'
+                );
+
+                if (!continueAnyway) {
+                    displayStream.getTracks().forEach(track => track.stop());
+                    throw new Error('Recording cancelled - no audio');
+                }
+
+                // Record without audio
+                const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl);
+                await recorder.startRecording();
+
+                meetingState.recorder = {
+                    isRecording: true,
+                    startTime: Date.now(),
+                    recordingId: message.recordingId,
+                    mediaRecorder: recorder,
+                    streams: [displayStream]
+                };
             }
         } else {
-            console.log('✅ Audio track found:', stream.getAudioTracks()[0].label);
+            console.log('✅ Audio track found:', displayStream.getAudioTracks()[0].label);
+            console.log('   Audio settings:', displayStream.getAudioTracks()[0].getSettings());
+
+            // Create and start the recorder with tab audio
+            const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl);
+            await recorder.startRecording();
+
+            // Store recorder state
+            meetingState.recorder = {
+                isRecording: true,
+                startTime: Date.now(),
+                recordingId: message.recordingId,
+                mediaRecorder: recorder,
+                streams: [displayStream]
+            };
         }
 
         if (!hasVideo && message.quality !== 'audio-only') {
             console.warn('⚠️ No video track detected!');
         }
-
-        // Create and start the recorder
-        const recorder = new MeetingRecorder(stream, message.recordingId, message.uploadUrl);
-        await recorder.startRecording();
-
-        // Store recorder state
-        meetingState.recorder = {
-            isRecording: true,
-            startTime: Date.now(),
-            recordingId: message.recordingId,
-            mediaRecorder: recorder
-        };
 
         // Show recording indicator
         updateRecordingIndicator(true);
@@ -522,6 +657,16 @@ function handleRecordingStopped(message) {
         // Stop the actual MediaRecorder if it exists
         if (meetingState.recorder.mediaRecorder) {
             meetingState.recorder.mediaRecorder.stopRecording();
+        }
+
+        // Stop all streams (display and microphone if used)
+        if (meetingState.recorder.streams) {
+            meetingState.recorder.streams.forEach(stream => {
+                stream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log('   Stopped track:', track.kind, track.label);
+                });
+            });
         }
 
         meetingState.recorder.isRecording = false;

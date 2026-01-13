@@ -104,6 +104,7 @@ class R2Storage:
             for obj in response.get('Contents', []):
                 recordings.append({
                     'key': obj['Key'],
+                    'name': obj['Key'].split('/')[-1],  # Extract filename
                     'size': obj['Size'],
                     'last_modified': obj['LastModified'].isoformat(),
                     'download_url': self.generate_download_url(obj['Key'])
@@ -129,10 +130,47 @@ class R2Storage:
                 Bucket=self.bucket_name,
                 Key=key
             )
+            print(f"✅ Deleted: {key}")
             return True
         except Exception as e:
-            print(f"Error deleting recording: {e}")
+            print(f"❌ Error deleting recording {key}: {e}")
             return False
+    
+    def delete_old_recordings(self, days=14):
+        """
+        Delete recordings older than specified days
+        
+        Args:
+            days: Number of days to keep recordings (default 14)
+            
+        Returns:
+            dict: Summary of deletion operation
+        """
+        cutoff_date = datetime.now() - timedelta(days=days)
+        recordings = self.list_recordings()
+        
+        deleted = []
+        failed = []
+        total_size_freed = 0
+        
+        for recording in recordings:
+            last_modified = datetime.fromisoformat(recording['last_modified'].replace('Z', '+00:00'))
+            last_modified = last_modified.replace(tzinfo=None)
+            
+            if last_modified < cutoff_date:
+                if self.delete_recording(recording['key']):
+                    deleted.append(recording['name'])
+                    total_size_freed += recording['size']
+                else:
+                    failed.append(recording['name'])
+        
+        return {
+            'deleted_count': len(deleted),
+            'failed_count': len(failed),
+            'size_freed': total_size_freed,
+            'deleted_files': deleted,
+            'failed_files': failed
+        }
     
     def get_recording_metadata(self, key):
         """
@@ -158,3 +196,14 @@ class R2Storage:
         except Exception as e:
             print(f"Error getting metadata: {e}")
             return None
+    
+    def get_bucket_size(self):
+        """
+        Calculate total size of all recordings in bucket
+        
+        Returns:
+            int: Total size in bytes
+        """
+        recordings = self.list_recordings()
+        total_size = sum(r['size'] for r in recordings)
+        return total_size

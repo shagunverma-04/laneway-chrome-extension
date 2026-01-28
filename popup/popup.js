@@ -1,6 +1,6 @@
-// Popup JavaScript - Handles UI interactions and state management
-
-const API_BASE_URL = 'http://localhost:5000';
+// Backend API URL - can be configured by users if they want backend features
+// Leave empty to use extension in local-only mode
+let API_BASE_URL = '';
 
 // State
 let currentState = {
@@ -15,6 +15,9 @@ let currentState = {
 // Initialize popup
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('Popup loaded');
+
+    // Load backend URL from storage
+    await loadBackendUrl();
 
     // Check authentication
     await checkAuth();
@@ -34,6 +37,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Update UI every second
     setInterval(updateUI, 1000);
 });
+
+// Load backend URL from storage
+async function loadBackendUrl() {
+    try {
+        const result = await chrome.storage.sync.get(['laneway_backend_url']);
+        if (result.laneway_backend_url) {
+            API_BASE_URL = result.laneway_backend_url;
+            console.log('Backend URL loaded:', API_BASE_URL);
+        } else {
+            console.log('No backend URL configured - running in local-only mode');
+        }
+    } catch (error) {
+        console.error('Error loading backend URL:', error);
+    }
+}
 
 // Check authentication status
 async function checkAuth() {
@@ -206,7 +224,11 @@ function setupEventListeners() {
     // Footer links
     document.getElementById('dashboard-link').addEventListener('click', (e) => {
         e.preventDefault();
-        chrome.tabs.create({ url: `${API_BASE_URL}/dashboard` });
+        if (API_BASE_URL) {
+            chrome.tabs.create({ url: `${API_BASE_URL}/dashboard` });
+        } else {
+            alert('Backend URL not configured. Please configure your backend URL in extension settings.');
+        }
     });
 
     document.getElementById('logout-link').addEventListener('click', (e) => {
@@ -307,6 +329,11 @@ async function handleAbsenceSubmit() {
     }
 
     try {
+        if (!API_BASE_URL) {
+            showMessage('absence-status', 'Backend not configured. Recording works without backend.', 'info');
+            return;
+        }
+
         showMessage('absence-status', 'Sending notification...', 'info');
 
         const authToken = await getAuthToken();
@@ -357,6 +384,18 @@ async function handleLogin() {
     }
 
     try {
+        if (!API_BASE_URL) {
+            showMessage('login-status', 'Backend not configured. Extension works in local-only mode.', 'info');
+            // Auto-login in local mode
+            await chrome.storage.sync.set({
+                laneway_auth_token: 'local-mode',
+                laneway_user_email: email || 'local@user.com',
+                laneway_user_id: 'local-user'
+            });
+            setTimeout(() => window.location.reload(), 1000);
+            return;
+        }
+
         showMessage('login-status', 'Logging in...', 'info');
 
         const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
@@ -403,6 +442,14 @@ async function loadUserStats() {
     }
 
     try {
+        if (!API_BASE_URL) {
+            // Show default values in local mode
+            document.getElementById('meetings-count').textContent = '-';
+            document.getElementById('speaking-time').textContent = '-';
+            document.getElementById('camera-usage').textContent = '-';
+            return;
+        }
+
         const authToken = await getAuthToken();
         const userId = await getUserId();
 

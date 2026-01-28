@@ -1,11 +1,13 @@
 // Configuration for API endpoints and cloud storage
 const CONFIG = {
   // Backend API Configuration
-  API_BASE_URL: 'http://localhost:5000', // Change to your deployed backend URL
-  
+  // Users can configure this in extension options after installation
+  // Leave empty to use local-only recording without backend features
+  API_BASE_URL: '', // Configure your backend URL in extension settings
+
   // Cloud Storage Configuration
   STORAGE_PROVIDER: 'S3', // 'S3' or 'GCS'
-  
+
   // Recording Settings
   RECORDING: {
     DEFAULT_QUALITY: 'audio-only', // 'audio-only', '720p', '1080p'
@@ -13,7 +15,7 @@ const CONFIG = {
     AUTO_START: false,
     TRACK_PARTICIPANTS: true
   },
-  
+
   // Analytics Settings
   ANALYTICS: {
     UPLOAD_INTERVAL: 30 * 1000, // 30 seconds
@@ -21,7 +23,7 @@ const CONFIG = {
     TRACK_AUDIO: true,
     TRACK_SPEAKING: true
   },
-  
+
   // Storage Keys
   STORAGE_KEYS: {
     AUTH_TOKEN: 'laneway_auth_token',

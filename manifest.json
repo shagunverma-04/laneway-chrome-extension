@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Laneway Meeting Recorder",
   "version": "1.0.0",
-  "description": "Record Google Meet sessions, track participant behavior, and automate meeting analytics",
+  "description": "Record Google Meet sessions with audio and video. Download recordings locally for transcription and analysis.",
   "permissions": [
     "tabCapture",
     "storage",
@@ -38,6 +38,7 @@
       "128": "icons/icon128.png"
     }
   },
+  "options_page": "options.html",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

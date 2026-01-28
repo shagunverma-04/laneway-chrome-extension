@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Laneway Settings</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 40px 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section h2 {
+            color: #444;
+            font-size: 18px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            color: #555;
+            font-weight: 500;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="url"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="url"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .help-text {
+            color: #888;
+            font-size: 12px;
+            margin-top: 5px;
+            line-height: 1.5;
+        }
+
+        .info-box {
+            background: #f8f9ff;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .info-box p {
+            color: #555;
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+
+        .info-box p:last-child {
+            margin-bottom: 0;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 20px;
+            display: none;
+            font-size: 14px;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #f0f0f0;
+            text-align: center;
+            color: #888;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚙️ Laneway Settings</h1>
+        <p class="subtitle">Configure your extension preferences</p>
+
+        <div class="section">
+            <h2>Backend Configuration (Optional)</h2>
+            
+            <div class="info-box">
+                <p><strong>📌 Note:</strong> The extension works perfectly without a backend server!</p>
+                <p>Recordings are saved locally to your Downloads folder. Configure a backend URL only if you want to use advanced features like cloud storage, analytics, or team collaboration.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="backend-url">Backend API URL</label>
+                <input 
+                    type="url" 
+                    id="backend-url" 
+                    placeholder="https://your-backend.com (leave empty for local-only mode)"
+                >
+                <p class="help-text">
+                    Leave empty to use the extension in local-only mode. Recordings will be saved to your Downloads folder.
+                </p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Recording Settings</h2>
+            
+            <div class="form-group">
+                <label for="default-quality">Default Recording Quality</label>
+                <select id="default-quality" style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px;">
+                    <option value="audio-only">Audio Only (Smallest file size)</option>
+                    <option value="720p">720p (Balanced)</option>
+                    <option value="1080p">1080p (Best quality)</option>
+                </select>
+                <p class="help-text">
+                    Choose the default quality for recordings. You can change this per-recording in the popup.
+                </p>
+            </div>
+        </div>
+
+        <button class="btn" id="save-btn">💾 Save Settings</button>
+        
+        <div class="status" id="status"></div>
+
+        <div class="footer">
+            <p>Laneway Meeting Recorder v1.0.0</p>
+            <p>Made with ❤️ for better meeting productivity</p>
+        </div>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+</html>

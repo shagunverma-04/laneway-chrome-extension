@@ -4,7 +4,8 @@
 console.log('Laneway content script loaded');
 
 // Import config (will be available from manifest)
-const API_BASE_URL = 'http://localhost:5000';
+// Backend URL can be configured in extension settings
+const API_BASE_URL = ''; // Configure in extension settings if using backend features
 
 // State management
 let meetingState = {

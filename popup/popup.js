@@ -55,9 +55,13 @@ async function loadBackendUrl() {
 
 // Check authentication status
 async function checkAuth() {
-    const result = await chrome.storage.sync.get(['laneway_auth_token', 'laneway_user_email']);
+    const result = await chrome.storage.sync.get(['laneway_auth_token', 'laneway_user_email', 'laneway_backend_url']);
+
+    // Check if backend is configured
+    const hasBackend = result.laneway_backend_url && result.laneway_backend_url.trim() !== '';
 
     if (result.laneway_auth_token && result.laneway_user_email) {
+        // Already authenticated
         currentState.isAuthenticated = true;
         document.getElementById('user-email').textContent = result.laneway_user_email;
         document.getElementById('status-dot').classList.add('online');
@@ -65,8 +69,26 @@ async function checkAuth() {
         // Show main UI, hide login
         document.getElementById('login-section').style.display = 'none';
         document.getElementById('recording-section').style.display = 'block';
-        document.getElementById('stats-section').style.display = 'block';
+        document.getElementById('stats-section').style.display = hasBackend ? 'block' : 'none';
+    } else if (!hasBackend) {
+        // No backend configured - auto-authenticate for local mode
+        console.log('No backend configured - enabling local mode');
+        await chrome.storage.sync.set({
+            laneway_auth_token: 'local-mode',
+            laneway_user_email: 'Local User',
+            laneway_user_id: 'local-user'
+        });
+
+        currentState.isAuthenticated = true;
+        document.getElementById('user-email').textContent = 'Local Mode';
+        document.getElementById('status-dot').classList.add('online');
+
+        // Show main UI, hide login and stats (no stats in local mode)
+        document.getElementById('login-section').style.display = 'none';
+        document.getElementById('recording-section').style.display = 'block';
+        document.getElementById('stats-section').style.display = 'none';
     } else {
+        // Backend configured but not authenticated
         currentState.isAuthenticated = false;
 
         // Show login, hide main UI
@@ -162,6 +184,9 @@ async function updateMeetingStatus() {
         document.getElementById('meeting-status-text').textContent = 'Error detecting meeting';
         document.getElementById('meeting-icon').textContent = '⚠️';
     }
+
+    // Update guidance section based on current state
+    updateGuidanceSection();
 }
 
 // Update recording UI
@@ -186,6 +211,41 @@ function updateRecordingUI(isRecording) {
 
         recordingDot.classList.remove('active');
         recordingText.textContent = 'Not Recording';
+    }
+
+    // Update guidance visibility
+    updateGuidanceSection();
+}
+
+// Update guidance section based on current state
+function updateGuidanceSection() {
+    const guidanceSection = document.getElementById('guidance-section');
+    if (!guidanceSection) return;
+
+    // Hide guidance when recording
+    if (currentState.isRecording) {
+        guidanceSection.classList.add('hidden');
+        return;
+    }
+
+    guidanceSection.classList.remove('hidden');
+
+    // Update step states
+    const step1 = document.getElementById('step-1');
+    const step2 = document.getElementById('step-2');
+
+    // Reset all steps
+    document.querySelectorAll('.guidance-steps .step').forEach(step => {
+        step.classList.remove('completed', 'active');
+    });
+
+    if (currentState.isInMeeting) {
+        // Step 1 completed, step 2 is active
+        step1.classList.add('completed');
+        step2.classList.add('active');
+    } else {
+        // Step 1 is active
+        step1.classList.add('active');
     }
 }
 

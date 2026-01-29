@@ -63,33 +63,69 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
+// Helper: Get backend URL from storage or config
+async function getBackendUrl() {
+    return new Promise((resolve) => {
+        chrome.storage.sync.get(['laneway_backend_url'], (result) => {
+            const url = result.laneway_backend_url || CONFIG.API_BASE_URL || '';
+            resolve(url);
+        });
+    });
+}
+
+// Helper: Generate local recording ID
+function generateLocalRecordingId() {
+    return 'local-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+}
+
 // Handle recording start
 async function handleStartRecording(data, tabId) {
     try {
         console.log('Starting recording for tab:', tabId);
 
+        let recordingId;
+        let uploadUrl = null;
 
-        // Request upload URL from backend first
-        const authToken = await getAuthToken();
-        const uploadUrlResponse = await fetch(`${CONFIG.API_BASE_URL}/api/recordings/upload-url`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                meetingId: data.meetingId,
-                estimatedSize: data.estimatedSize || 100000000, // 100MB default
-                format: data.quality === 'audio-only' ? 'webm-audio' : 'webm-video'
-            })
-        });
+        // Check if backend is configured
+        const backendUrl = await getBackendUrl();
 
-        if (!uploadUrlResponse.ok) {
-            const errorText = await uploadUrlResponse.text();
-            throw new Error(`Failed to get upload URL from backend: ${errorText}`);
+        if (backendUrl) {
+            // Backend mode - request upload URL from backend
+            try {
+                const authToken = await getAuthToken();
+                const uploadUrlResponse = await fetch(`${backendUrl}/api/recordings/upload-url`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        meetingId: data.meetingId,
+                        estimatedSize: data.estimatedSize || 100000000, // 100MB default
+                        format: data.quality === 'audio-only' ? 'webm-audio' : 'webm-video'
+                    })
+                });
+
+                if (uploadUrlResponse.ok) {
+                    const response = await uploadUrlResponse.json();
+                    uploadUrl = response.uploadUrl;
+                    recordingId = response.recordingId;
+                    console.log('Backend mode: Got upload URL from backend');
+                } else {
+                    // Backend returned error, fall back to local mode
+                    console.warn('Backend returned error, falling back to local mode');
+                    recordingId = generateLocalRecordingId();
+                }
+            } catch (backendError) {
+                // Backend fetch failed, fall back to local mode
+                console.warn('Backend unavailable, falling back to local mode:', backendError.message);
+                recordingId = generateLocalRecordingId();
+            }
+        } else {
+            // Local-only mode - no backend configured
+            console.log('Local-only mode: No backend configured');
+            recordingId = generateLocalRecordingId();
         }
-
-        const { uploadUrl, recordingId } = await uploadUrlResponse.json();
 
         // Update recording state BEFORE sending to content script
         recordingState = {
@@ -99,7 +135,8 @@ async function handleStartRecording(data, tabId) {
             recordingId: recordingId,
             uploadUrl: uploadUrl,
             quality: data.quality,
-            tabId: tabId
+            tabId: tabId,
+            isLocalMode: !uploadUrl
         };
 
         // Save state to storage
@@ -111,13 +148,14 @@ async function handleStartRecording(data, tabId) {
             type: 'RECORDING_STARTED',
             recordingId: recordingId,
             uploadUrl: uploadUrl,
-            quality: data.quality
+            quality: data.quality,
+            isLocalMode: !uploadUrl
         });
 
         return {
             success: true,
             recordingId: recordingId,
-            message: 'Recording started successfully'
+            message: uploadUrl ? 'Recording started (cloud mode)' : 'Recording started (local mode)'
         };
 
     } catch (error) {
@@ -146,6 +184,7 @@ async function handleStopRecording(data) {
         const recordingId = recordingState.recordingId;
         const meetingId = recordingState.meetingId;
         const startTime = recordingState.startTime;
+        const isLocalMode = recordingState.isLocalMode;
 
         // Send message to content script to stop the MediaRecorder
         try {
@@ -153,38 +192,51 @@ async function handleStopRecording(data) {
                 type: 'RECORDING_STOPPED',
                 recordingId: recordingId
             });
-            console.log('✅ Sent stop message to content script');
+            console.log('Sent stop message to content script');
         } catch (error) {
-            console.warn('⚠️ Could not send stop message to content script:', error.message);
+            console.warn('Could not send stop message to content script:', error.message);
         }
 
-        // Wait a bit for the content script to process and upload
+        // Wait a bit for the content script to process and save/upload
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Notify backend that recording is complete
-        const authToken = await getAuthToken();
-        const completeResponse = await fetch(`${CONFIG.API_BASE_URL}/api/recordings/complete`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                recordingId: recordingId,
-                meetingId: meetingId,
-                metadata: data.metadata || {},
-                participants: data.participants || [],
-                duration: Date.now() - startTime
-            })
-        });
+        let taskCount = 0;
 
-        if (!completeResponse.ok) {
-            console.error('Failed to complete recording on backend');
-            throw new Error('Failed to complete recording on backend');
+        // Only notify backend if not in local mode
+        if (!isLocalMode) {
+            const backendUrl = await getBackendUrl();
+            if (backendUrl) {
+                try {
+                    const authToken = await getAuthToken();
+                    const completeResponse = await fetch(`${backendUrl}/api/recordings/complete`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${authToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            recordingId: recordingId,
+                            meetingId: meetingId,
+                            metadata: data.metadata || {},
+                            participants: data.participants || [],
+                            duration: Date.now() - startTime
+                        })
+                    });
+
+                    if (completeResponse.ok) {
+                        const result = await completeResponse.json();
+                        console.log('Recording completed on backend:', result);
+                        taskCount = result.taskCount || 0;
+                    } else {
+                        console.warn('Backend returned error when completing recording');
+                    }
+                } catch (backendError) {
+                    console.warn('Could not notify backend:', backendError.message);
+                }
+            }
+        } else {
+            console.log('Local mode: Recording saved to Downloads folder');
         }
-
-        const result = await completeResponse.json();
-        console.log('✅ Recording completed on backend:', result);
 
         // Reset recording state
         recordingState = {
@@ -193,19 +245,20 @@ async function handleStopRecording(data) {
             startTime: null,
             recordingId: null,
             mediaRecorder: null,
-            tabId: null
+            tabId: null,
+            isLocalMode: false
         };
 
         await chrome.storage.local.set({ recordingState });
 
         return {
             success: true,
-            message: 'Recording stopped and uploaded',
-            taskCount: result.taskCount
+            message: isLocalMode ? 'Recording saved to Downloads' : 'Recording stopped and uploaded',
+            taskCount: taskCount
         };
 
     } catch (error) {
-        console.error('❌ Error stopping recording:', error);
+        console.error('Error stopping recording:', error);
         throw error;
     }
 }
@@ -289,9 +342,17 @@ async function uploadRecording(blob, uploadUrl) {
 // Handle analytics data upload
 async function handleAnalyticsUpload(data) {
     try {
+        // Check if backend is configured
+        const backendUrl = await getBackendUrl();
+        if (!backendUrl) {
+            // No backend configured, skip analytics upload
+            console.log('Local mode: Skipping analytics upload');
+            return { success: true, skipped: true };
+        }
+
         const authToken = await getAuthToken();
 
-        const response = await fetch(`${CONFIG.API_BASE_URL}/api/analytics/upload`, {
+        const response = await fetch(`${backendUrl}/api/analytics/upload`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${authToken}`,
@@ -353,16 +414,12 @@ function handleMeetingEnded(data) {
     chrome.storage.local.remove('currentMeeting');
 }
 
-// Helper: Get auth token from storage
+// Helper: Get auth token from storage (returns empty string if not found)
 async function getAuthToken() {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         chrome.storage.sync.get([CONFIG.STORAGE_KEYS.AUTH_TOKEN], (result) => {
-            const token = result[CONFIG.STORAGE_KEYS.AUTH_TOKEN];
-            if (!token) {
-                reject(new Error('Not authenticated. Please log in.'));
-            } else {
-                resolve(token);
-            }
+            const token = result[CONFIG.STORAGE_KEYS.AUTH_TOKEN] || '';
+            resolve(token);
         });
     });
 }

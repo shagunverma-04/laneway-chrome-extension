@@ -167,12 +167,18 @@ async function updateMeetingStatus() {
         }
 
         // Get recording state from background
-        const recordingState = await chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATE' });
-        if (recordingState && recordingState.state && recordingState.state.isRecording) {
-            currentState.isRecording = true;
-            currentState.recordingStartTime = recordingState.state.startTime;
-            updateRecordingUI(true);
-        } else {
+        try {
+            const recordingState = await chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATE' });
+            if (recordingState && recordingState.state && recordingState.state.isRecording) {
+                currentState.isRecording = true;
+                currentState.recordingStartTime = recordingState.state.startTime;
+                updateRecordingUI(true);
+            } else {
+                currentState.isRecording = false;
+                updateRecordingUI(false);
+            }
+        } catch (bgError) {
+            console.log('Could not get recording state from background:', bgError.message);
             currentState.isRecording = false;
             updateRecordingUI(false);
         }

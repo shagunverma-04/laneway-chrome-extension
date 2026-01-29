@@ -45,7 +45,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'GET_RECORDING_STATE':
             sendResponse({ state: recordingState });
-            break;
+            return false; // Synchronous response
 
         case 'UPLOAD_ANALYTICS':
             handleAnalyticsUpload(message.data)
@@ -55,11 +55,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'MEETING_DETECTED':
             handleMeetingDetected(message.data, sender.tab.id);
-            break;
+            sendResponse({ success: true });
+            return false; // Synchronous response
 
         case 'MEETING_ENDED':
             handleMeetingEnded(message.data);
-            break;
+            sendResponse({ success: true });
+            return false; // Synchronous response
+
+        case 'RECORDING_FAILED':
+            console.error('Recording failed:', message.error);
+            // Reset recording state
+            recordingState = {
+                isRecording: false,
+                meetingId: null,
+                startTime: null,
+                recordingId: null
+            };
+            chrome.storage.local.set({ recordingState });
+            sendResponse({ success: true });
+            return false;
+
+        default:
+            console.log('Unknown message type:', message.type);
+            sendResponse({ success: false, error: 'Unknown message type' });
+            return false;
     }
 });
 

@@ -346,7 +346,7 @@ function handleMeetingEnd() {
             meetingId: meetingState.meetingId,
             participants: Array.from(meetingState.participants.values())
         }
-    });
+    }).catch(err => console.log('Could not notify background of meeting end:', err));
 
     // Reset state
     meetingState.participants.clear();
@@ -400,11 +400,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
         case 'RECORDING_STARTED':
             handleRecordingStarted(message);
-            break;
+            sendResponse({ success: true });
+            return false; // Synchronous response
 
         case 'RECORDING_STOPPED':
             handleRecordingStopped(message);
-            break;
+            sendResponse({ success: true });
+            return false; // Synchronous response
 
         case 'GET_MEETING_INFO':
             sendResponse({
@@ -413,7 +415,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 isInMeeting: meetingState.isInMeeting,
                 participantCount: meetingState.participants.size
             });
-            break;
+            return false; // Synchronous response
 
         case 'GET_PARTICIPANTS':
             // Return participant data for recording completion
@@ -429,9 +431,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }));
             console.log('Returning participant data:', participants.length, 'participants');
             sendResponse({ participants });
-            break;
+            return false; // Synchronous response
+
+        default:
+            sendResponse({ success: false, error: 'Unknown message type' });
+            return false;
     }
-    return true; // Keep message channel open for async responses
 });
 
 // Handle recording started
@@ -649,7 +654,7 @@ async function handleRecordingStarted(message) {
         chrome.runtime.sendMessage({
             type: 'RECORDING_FAILED',
             error: error.message
-        });
+        }).catch(err => console.log('Could not notify background of recording failure:', err));
     }
 }
 

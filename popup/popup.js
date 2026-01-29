@@ -309,9 +309,14 @@ async function handleRecordToggle() {
         return;
     }
 
+    const recordBtn = document.getElementById('record-btn');
+    recordBtn.disabled = true; // Prevent double-clicks
+
     try {
         if (currentState.isRecording) {
             // Stop recording
+            console.log('Stopping recording...');
+
             // First, get participant data from content script
             let participants = [];
             try {
@@ -337,17 +342,20 @@ async function handleRecordToggle() {
                 }
             });
 
-            if (response.success) {
-                currentState.isRecording = false;
-                currentState.recordingStartTime = null;
-                updateRecordingUI(false);
+            // Always reset state when stopping, even if there's an error
+            currentState.isRecording = false;
+            currentState.recordingStartTime = null;
+            updateRecordingUI(false);
 
-                alert(`Recording stopped! ${response.taskCount || 0} tasks will be extracted.`);
+            if (response && response.success) {
+                alert(response.message || 'Recording stopped! Check your Downloads folder.');
             } else {
-                throw new Error(response.error || 'Failed to stop recording');
+                console.warn('Stop recording response:', response);
+                alert('Recording stopped. Check your Downloads folder for the file.');
             }
         } else {
             // Start recording
+            console.log('Starting recording...');
             const quality = document.getElementById('quality-select').value;
 
             const response = await chrome.runtime.sendMessage({
@@ -358,17 +366,28 @@ async function handleRecordToggle() {
                 }
             });
 
-            if (response.success) {
+            if (response && response.success) {
                 currentState.isRecording = true;
                 currentState.recordingStartTime = Date.now();
                 updateRecordingUI(true);
+                console.log('Recording started:', response.message);
             } else {
-                throw new Error(response.error || 'Failed to start recording');
+                const errorMsg = response?.error || 'Failed to start recording. Make sure you are in an active meeting.';
+                throw new Error(errorMsg);
             }
         }
     } catch (error) {
         console.error('Error toggling recording:', error);
         alert('Error: ' + error.message);
+
+        // If we were trying to stop and it failed, still reset the UI
+        if (currentState.isRecording) {
+            currentState.isRecording = false;
+            currentState.recordingStartTime = null;
+            updateRecordingUI(false);
+        }
+    } finally {
+        recordBtn.disabled = false;
     }
 }
 

@@ -440,13 +440,16 @@ async function handleRecordingStarted(message) {
 
     try {
         // Use getDisplayMedia to capture the tab/screen
-        // Request both video and audio explicitly
+        // IMPORTANT: getDisplayMedia REQUIRES video to be true (cannot be false)
+        // For audio-only, we still capture video but use a lower bitrate
+        const isAudioOnly = message.quality === 'audio-only';
+
         const constraints = {
-            video: message.quality !== 'audio-only' ? {
+            video: {
                 displaySurface: "browser",
-                width: { ideal: 1920 },
-                height: { ideal: 1080 }
-            } : false,
+                width: isAudioOnly ? { ideal: 640 } : { ideal: 1920 },
+                height: isAudioOnly ? { ideal: 480 } : { ideal: 1080 }
+            },
             audio: {
                 echoCancellation: false,  // Disable to get raw audio
                 noiseSuppression: false,  // Disable to get raw audio
@@ -491,7 +494,7 @@ async function handleRecordingStarted(message) {
                     displayStream.getVideoTracks().forEach(track => combinedStream.addTrack(track));
                     audioStream.getAudioTracks().forEach(track => combinedStream.addTrack(track));
 
-                    const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl);
+                    const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl, isAudioOnly);
                     await recorder.startRecording();
 
                     meetingState.recorder = {
@@ -549,7 +552,7 @@ async function handleRecordingStarted(message) {
                 });
 
                 // Use combined stream
-                const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl);
+                const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl, isAudioOnly);
                 await recorder.startRecording();
 
                 // Store recorder state
@@ -579,7 +582,7 @@ async function handleRecordingStarted(message) {
                 }
 
                 // Record without audio
-                const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl);
+                const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly);
                 await recorder.startRecording();
 
                 meetingState.recorder = {
@@ -591,11 +594,11 @@ async function handleRecordingStarted(message) {
                 };
             }
         } else {
-            console.log('✅ Audio track found:', displayStream.getAudioTracks()[0].label);
-            console.log('   Audio settings:', displayStream.getAudioTracks()[0].getSettings());
+            console.log('Audio track found:', displayStream.getAudioTracks()[0].label);
+            console.log('Audio settings:', displayStream.getAudioTracks()[0].getSettings());
 
             // Create and start the recorder with tab audio
-            const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl);
+            const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly);
             await recorder.startRecording();
 
             // Store recorder state
@@ -679,10 +682,11 @@ function handleRecordingStopped(message) {
 
 // Meeting Recorder Class
 class MeetingRecorder {
-    constructor(stream, recordingId, uploadUrl) {
+    constructor(stream, recordingId, uploadUrl, isAudioOnly = false) {
         this.stream = stream;
         this.recordingId = recordingId;
         this.uploadUrl = uploadUrl;
+        this.isAudioOnly = isAudioOnly;
         this.mediaRecorder = null;
         this.recordedChunks = [];
         this.startTime = null;
@@ -692,10 +696,27 @@ class MeetingRecorder {
 
     async startRecording() {
         try {
-            const options = {
-                mimeType: 'video/webm;codecs=vp9,opus',
-                videoBitsPerSecond: 2500000
-            };
+            // Choose appropriate options based on recording type
+            let options;
+            if (this.isAudioOnly) {
+                // For audio-only, use lower bitrate
+                options = {
+                    mimeType: 'video/webm;codecs=vp9,opus',
+                    videoBitsPerSecond: 100000,  // Low video bitrate for audio-only
+                    audioBitsPerSecond: 128000   // Good audio quality
+                };
+            } else {
+                options = {
+                    mimeType: 'video/webm;codecs=vp9,opus',
+                    videoBitsPerSecond: 2500000
+                };
+            }
+
+            // Check if the mimeType is supported
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                console.warn('VP9 not supported, falling back to VP8');
+                options.mimeType = 'video/webm;codecs=vp8,opus';
+            }
 
             this.mediaRecorder = new MediaRecorder(this.stream, options);
             this.startTime = Date.now();
@@ -842,11 +863,18 @@ class AbsenceManager {
     async fetchAbsences() {
         if (!this.meetingId) return;
 
+        // Get backend URL from storage
+        const backendUrl = await this.getBackendUrl();
+        if (!backendUrl) {
+            console.log('No backend configured, skipping absence fetch');
+            return;
+        }
+
         try {
             const authToken = await this.getAuthToken();
 
             const response = await fetch(
-                `${API_BASE_URL}/api/absences/meeting/${this.meetingId}`,
+                `${backendUrl}/api/absences/meeting/${this.meetingId}`,
                 {
                     headers: {
                         'Authorization': `Bearer ${authToken}`
@@ -875,6 +903,14 @@ class AbsenceManager {
         return new Promise((resolve) => {
             chrome.storage.sync.get(['laneway_auth_token'], (result) => {
                 resolve(result.laneway_auth_token || '');
+            });
+        });
+    }
+
+    async getBackendUrl() {
+        return new Promise((resolve) => {
+            chrome.storage.sync.get(['laneway_backend_url'], (result) => {
+                resolve(result.laneway_backend_url || '');
             });
         });
     }
@@ -979,10 +1015,13 @@ class AbsenceManager {
     }
 
     async markAsShown() {
+        const backendUrl = await this.getBackendUrl();
+        if (!backendUrl) return;
+
         try {
             const authToken = await this.getAuthToken();
 
-            await fetch(`${API_BASE_URL}/api/absences/mark-shown`, {
+            await fetch(`${backendUrl}/api/absences/mark-shown`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${authToken}`,

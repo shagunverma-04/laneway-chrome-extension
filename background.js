@@ -63,6 +63,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: true });
             return false; // Synchronous response
 
+        case 'UPLOAD_COMPLETE':
+            // Handled by the listener in handleStopRecording
+            console.log('Upload complete for:', message.recordingId);
+            sendResponse({ success: true });
+            return false;
+
         case 'RECORDING_FAILED':
             console.error('Recording failed:', message.error);
             // Reset recording state
@@ -217,8 +223,25 @@ async function handleStopRecording(data) {
             console.warn('Could not send stop message to content script:', error.message);
         }
 
-        // Wait a bit for the content script to process and save/upload
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Wait for content script to finish uploading (up to 60s for large files)
+        await new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+                console.warn('Upload completion timed out after 60s, proceeding');
+                chrome.runtime.onMessage.removeListener(listener);
+                resolve();
+            }, 60000);
+
+            function listener(msg) {
+                if (msg.type === 'UPLOAD_COMPLETE' && msg.recordingId === recordingId) {
+                    console.log('Upload complete signal received');
+                    clearTimeout(timeout);
+                    chrome.runtime.onMessage.removeListener(listener);
+                    resolve();
+                }
+            }
+
+            chrome.runtime.onMessage.addListener(listener);
+        });
 
         let taskCount = 0;
 

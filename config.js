@@ -3,7 +3,7 @@ const CONFIG = {
   // Backend API Configuration
   // Users can configure this in extension options after installation
   // Leave empty to use local-only recording without backend features
-  API_BASE_URL: '', // Configure your backend URL in extension settings
+  API_BASE_URL: 'https://automated-meeting-management-laneway.onrender.com', // Render deployment
 
   // Cloud Storage Configuration
   STORAGE_PROVIDER: 'S3', // 'S3' or 'GCS'

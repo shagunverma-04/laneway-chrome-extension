@@ -6,26 +6,30 @@
 }
 
 :root {
-  --primary-color: #667eea;
-  --primary-dark: #5568d3;
-  --secondary-color: #764ba2;
+  --primary-color: #f5b513;
+  --primary-dark: #d9a011;
+  --secondary-color: #f5b513;
   --success-color: #10b981;
   --danger-color: #ef4444;
-  --warning-color: #f59e0b;
-  --bg-dark: #1a1a2e;
-  --bg-card: #16213e;
-  --bg-light: #0f3460;
-  --text-primary: #ffffff;
-  --text-secondary: #a0aec0;
-  --border-color: #2d3748;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.4);
+  --warning-color: #f5b513;
+  --bg-dark: #000000;
+  --bg-card: #1a1a1a;
+  --bg-light: #dbdddc;
+  --text-primary: #f5f7f3;
+  --text-secondary: #dbdddc;
+  --border-color: #333333;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.6);
+
+  /* Font families */
+  --font-heading: 'Clash Display', sans-serif;
+  --font-body: 'Satoshi', sans-serif;
 }
 
 body {
   width: 380px;
   min-height: 500px;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-body);
   background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-card) 100%);
   color: var(--text-primary);
   overflow-x: hidden;
@@ -52,8 +56,10 @@ body {
 }
 
 .logo-icon {
-  font-size: 28px;
-  animation: pulse 2s ease-in-out infinite;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 4px rgba(245, 181, 19, 0.5));
 }
 
 @keyframes pulse {
@@ -62,12 +68,10 @@ body {
 }
 
 .logo h1 {
+  font-family: var(--font-heading);
   font-size: 22px;
-  font-weight: 700;
-  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-weight: 600;
+  color: var(--primary-color);
 }
 
 .auth-status {
@@ -102,8 +106,8 @@ body {
 }
 
 .status-card {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
-  border: 1px solid rgba(102, 126, 234, 0.2);
+  background: linear-gradient(135deg, rgba(245, 181, 19, 0.1), rgba(245, 181, 19, 0.05));
+  border: 1px solid rgba(245, 181, 19, 0.2);
   border-radius: 12px;
   padding: 16px;
   display: flex;
@@ -141,8 +145,9 @@ body {
 }
 
 .status-value {
+  font-family: var(--font-heading);
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
@@ -197,7 +202,7 @@ body {
 }
 
 .recording-time {
-  font-family: 'Courier New', monospace;
+  font-family: 'Satoshi', monospace;
   font-size: 16px;
   font-weight: 600;
   color: var(--primary-color);
@@ -244,14 +249,15 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-  color: white;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+  background: linear-gradient(135deg, var(--primary-color), #d9a011);
+  color: #000000;
+  font-family: var(--font-heading);
+  box-shadow: 0 4px 15px rgba(245, 181, 19, 0.4);
 }
 
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+  box-shadow: 0 6px 20px rgba(245, 181, 19, 0.6);
 }
 
 .btn-primary:active {
@@ -364,13 +370,13 @@ body {
 }
 
 .toggle-input:checked + .toggle-slider {
-  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+  background: linear-gradient(135deg, var(--primary-color), #d9a011);
   border-color: var(--primary-color);
 }
 
 .toggle-input:checked + .toggle-slider::before {
   transform: translateX(20px);
-  background: white;
+  background: #000000;
 }
 
 .toggle-text {
@@ -392,9 +398,11 @@ body {
 }
 
 .section-header h3 {
+  font-family: var(--font-heading);
   font-size: 16px;
   font-weight: 600;
   margin-bottom: 4px;
+  color: var(--primary-color);
 }
 
 .section-header p {
@@ -470,7 +478,7 @@ body {
 
 .status-message.info {
   display: block;
-  background: rgba(102, 126, 234, 0.1);
+  background: rgba(245, 181, 19, 0.1);
   border: 1px solid var(--primary-color);
   color: var(--primary-color);
 }
@@ -487,8 +495,8 @@ body {
 }
 
 .stat-card {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
-  border: 1px solid rgba(102, 126, 234, 0.2);
+  background: linear-gradient(135deg, rgba(245, 181, 19, 0.1), rgba(245, 181, 19, 0.05));
+  border: 1px solid rgba(245, 181, 19, 0.2);
   border-radius: 8px;
   padding: 12px;
   text-align: center;
@@ -497,16 +505,14 @@ body {
 
 .stat-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+  box-shadow: 0 4px 12px rgba(245, 181, 19, 0.2);
 }
 
 .stat-value {
+  font-family: var(--font-heading);
   font-size: 20px;
-  font-weight: 700;
-  background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-weight: 600;
+  color: var(--primary-color);
   margin-bottom: 4px;
 }
 
@@ -525,9 +531,11 @@ body {
 }
 
 .login-card h2 {
+  font-family: var(--font-heading);
   font-size: 20px;
   margin-bottom: 8px;
   text-align: center;
+  color: var(--primary-color);
 }
 
 .login-card p {
@@ -585,8 +593,8 @@ body {
 }
 
 .guidance-card {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(5, 150, 105, 0.1));
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: linear-gradient(135deg, rgba(245, 181, 19, 0.1), rgba(245, 181, 19, 0.05));
+  border: 1px solid rgba(245, 181, 19, 0.3);
   border-radius: 12px;
   padding: 16px;
 }
@@ -603,9 +611,10 @@ body {
 }
 
 .guidance-header h3 {
+  font-family: var(--font-heading);
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--primary-color);
   margin: 0;
 }
 
@@ -637,7 +646,7 @@ body {
 }
 
 .guidance-steps .step.active {
-  background: rgba(102, 126, 234, 0.1);
+  background: rgba(245, 181, 19, 0.1);
   border-radius: 6px;
   padding-left: 8px;
   padding-right: 8px;
@@ -688,7 +697,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 10px;
-  background: rgba(102, 126, 234, 0.1);
+  background: rgba(245, 181, 19, 0.1);
   border-radius: 6px;
   font-size: 12px;
   color: var(--text-secondary);

@@ -736,9 +736,18 @@ class MeetingRecorder {
                 }
             };
 
-            this.mediaRecorder.onstop = () => {
+            this.mediaRecorder.onstop = async () => {
                 console.log('🛑 MediaRecorder stopped, total chunks:', this.recordedChunks.length);
-                this.uploadChunks();
+                await this.uploadChunks();
+                // Notify background that upload is complete
+                try {
+                    await chrome.runtime.sendMessage({
+                        type: 'UPLOAD_COMPLETE',
+                        recordingId: this.recordingId
+                    });
+                } catch (e) {
+                    console.warn('Could not notify background of upload completion:', e.message);
+                }
             };
 
             this.mediaRecorder.onerror = (event) => {
@@ -824,30 +833,45 @@ class MeetingRecorder {
             alert('Failed to download recording: ' + downloadError.message);
         }
 
-        try {
-            // Also try to upload to cloud storage if URL is provided
-            if (this.uploadUrl && !this.uploadUrl.startsWith('local://')) {
-                console.log('☁️ Uploading to cloud:', this.uploadUrl);
-                const response = await fetch(this.uploadUrl, {
-                    method: 'PUT',
-                    body: blob,
-                    headers: {
-                        'Content-Type': 'video/webm'
-                    }
-                });
+        // Upload to cloud storage if URL is provided
+        if (this.uploadUrl) {
+            const maxRetries = 2;
+            let uploaded = false;
 
-                if (response.ok) {
-                    console.log('✅ Recording uploaded to cloud successfully');
-                    this.recordedChunks = [];
-                } else {
-                    console.error('❌ Failed to upload recording:', response.statusText);
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    console.log(`☁️ Uploading to cloud (attempt ${attempt}/${maxRetries}):`, this.uploadUrl);
+                    const response = await fetch(this.uploadUrl, {
+                        method: 'PUT',
+                        body: blob,
+                        headers: {
+                            'Content-Type': 'video/webm'
+                        }
+                    });
+
+                    if (response.ok) {
+                        console.log('✅ Recording uploaded to cloud successfully');
+                        this.recordedChunks = [];
+                        uploaded = true;
+                        break;
+                    } else {
+                        console.error(`❌ Cloud upload attempt ${attempt} failed:`, response.status, response.statusText);
+                    }
+                } catch (error) {
+                    console.error(`❌ Cloud upload attempt ${attempt} error:`, error.message);
                 }
-            } else {
-                console.log('ℹ️ Skipping cloud upload (local mode)');
+
+                // Wait before retry
+                if (attempt < maxRetries) {
+                    await new Promise(r => setTimeout(r, 2000));
+                }
             }
 
-        } catch (error) {
-            console.error('❌ Error uploading recording:', error);
+            if (!uploaded) {
+                alert('⚠️ Cloud upload failed after retries. Your recording is saved locally in Downloads.');
+            }
+        } else {
+            console.log('ℹ️ Skipping cloud upload (local mode)');
         }
     }
 }

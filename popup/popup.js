@@ -290,11 +290,10 @@ function setupEventListeners() {
     // Footer links
     document.getElementById('dashboard-link').addEventListener('click', (e) => {
         e.preventDefault();
-        if (API_BASE_URL) {
-            chrome.tabs.create({ url: `${API_BASE_URL}/dashboard` });
-        } else {
-            alert('Backend URL not configured. Please configure your backend URL in extension settings.');
-        }
+        const dashboardUrl = API_BASE_URL
+            ? `${API_BASE_URL}/dashboard`
+            : 'https://automated-meeting-management-laneway.onrender.com';
+        chrome.tabs.create({ url: dashboardUrl });
     });
 
     document.getElementById('logout-link').addEventListener('click', (e) => {

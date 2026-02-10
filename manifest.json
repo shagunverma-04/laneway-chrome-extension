@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Laneway Meeting Recorder",
+  "name": "laneway bee",
   "version": "1.0.0",
   "description": "Record Google Meet sessions with audio and video. Download recordings locally for transcription and analysis.",
   "permissions": [
@@ -33,22 +33,23 @@
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "icons/logo.png",
+      "48": "icons/logo.png",
+      "128": "icons/logo.png"
     }
   },
   "options_page": "options.html",
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "icons/logo.png",
+    "48": "icons/logo.png",
+    "128": "icons/logo.png"
   },
   "web_accessible_resources": [
     {
       "resources": [
         "icons/*",
-        "styles/*"
+        "styles/*",
+        "fonts/*"
       ],
       "matches": [
         "https://meet.google.com/*"

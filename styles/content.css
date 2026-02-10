@@ -31,7 +31,7 @@
     align-items: center;
     gap: 10px;
     color: white;
-    font-family: 'Google Sans', Arial, sans-serif;
+    font-family: 'Satoshi', Arial, sans-serif;
     font-size: 14px;
     font-weight: 500;
 }
@@ -63,7 +63,7 @@
 }
 
 .laneway-recording-time {
-    font-family: 'Courier New', monospace;
+    font-family: 'Satoshi', monospace;
     font-weight: 600;
     opacity: 0.9;
 }
@@ -71,13 +71,14 @@
 /* Absence Banner */
 .laneway-absence-banner {
     position: relative;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
+    background: linear-gradient(135deg, #000000 0%, #1a1a1a 100%);
+    color: #f5f7f3;
     padding: 16px 20px;
     border-radius: 12px;
     margin: 10px;
-    font-family: 'Google Sans', Arial, sans-serif;
-    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+    font-family: 'Satoshi', Arial, sans-serif;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(245, 181, 19, 0.3);
     animation: slideDown 0.4s ease-out;
     max-width: 600px;
 }
@@ -95,12 +96,14 @@
 }
 
 .laneway-absence-title {
+    font-family: 'Satoshi', sans-serif;
     font-weight: 600;
     font-size: 15px;
     margin-bottom: 12px;
     display: flex;
     align-items: center;
     gap: 8px;
+    color: #f5b513;
 }
 
 .laneway-absence-icon {
@@ -114,15 +117,16 @@
 }
 
 .laneway-absence-item {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(245, 181, 19, 0.1);
     padding: 12px 14px;
     border-radius: 8px;
     backdrop-filter: blur(10px);
     transition: all 0.3s ease;
+    border: 1px solid rgba(245, 181, 19, 0.2);
 }
 
 .laneway-absence-item:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(245, 181, 19, 0.15);
     transform: translateX(4px);
 }
 

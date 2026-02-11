@@ -1,12 +1,11 @@
 // Configuration for API endpoints and cloud storage
 const CONFIG = {
-  // Backend API Configuration
-  // Users can configure this in extension options after installation
-  // Leave empty to use local-only recording without backend features
-  API_BASE_URL: 'https://automated-meeting-management-laneway.onrender.com', // Render deployment
+  // R2 Upload Worker — set this after deploying the Cloudflare Worker
+  // e.g. 'https://laneway-r2-upload.<your-subdomain>.workers.dev'
+  R2_WORKER_URL: 'https://laneway-r2-upload.laneway-r2-upload.workers.dev',
 
-  // Cloud Storage Configuration
-  STORAGE_PROVIDER: 'S3', // 'S3' or 'GCS'
+  // Shared secret that matches the Worker's API_KEY secret
+  R2_API_KEY: 'Devlaneway@1234#',
 
   // Recording Settings
   RECORDING: {

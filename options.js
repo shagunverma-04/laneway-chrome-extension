@@ -8,7 +8,7 @@ async function loadSettings() {
     try {
         const result = await chrome.storage.sync.get(['laneway_backend_url', 'laneway_default_quality']);
 
-        document.getElementById('backend-url').value = result.laneway_backend_url || '';
+        document.getElementById('backend-url').value = result.laneway_backend_url || 'http://localhost:5000';
         document.getElementById('default-quality').value = result.laneway_default_quality || 'audio-only';
 
         console.log('Settings loaded:', result);

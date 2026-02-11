@@ -69,6 +69,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: true });
             return false;
 
+        case 'PARTICIPANT_DATA':
+            handleParticipantDataUpload(message.data)
+                .then(result => console.log('Participant data upload result:', result))
+                .catch(err => console.error('Participant data upload failed:', err.message));
+            sendResponse({ success: true });
+            return false;
+
         case 'RECORDING_FAILED':
             console.error('Recording failed:', message.error);
             // Reset recording state
@@ -93,15 +100,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function getBackendUrl() {
     return new Promise((resolve) => {
         chrome.storage.sync.get(['laneway_backend_url'], (result) => {
-            const url = result.laneway_backend_url || CONFIG.API_BASE_URL || '';
+            const url = result.laneway_backend_url || '';
             resolve(url);
         });
     });
 }
 
-// Helper: Generate local recording ID
-function generateLocalRecordingId() {
-    return 'local-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+// Helper: Generate recording ID using meeting ID
+function generateRecordingId(meetingId) {
+    const sanitized = (meetingId || 'unknown').replace(/[^a-zA-Z0-9-]/g, '-');
+    return `recording_${sanitized}_${Date.now()}`;
 }
 
 // Handle recording start
@@ -109,48 +117,17 @@ async function handleStartRecording(data, tabId) {
     try {
         console.log('Starting recording for tab:', tabId);
 
-        let recordingId;
+        const recordingId = generateRecordingId(data.meetingId);
         let uploadUrl = null;
+        let isLocalMode = true;
 
-        // Check if backend is configured
-        const backendUrl = await getBackendUrl();
-
-        if (backendUrl) {
-            // Backend mode - request upload URL from backend
-            try {
-                const authToken = await getAuthToken();
-                const uploadUrlResponse = await fetch(`${backendUrl}/api/recordings/upload-url`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${authToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        meetingId: data.meetingId,
-                        estimatedSize: data.estimatedSize || 100000000, // 100MB default
-                        format: data.quality === 'audio-only' ? 'webm-audio' : 'webm-video'
-                    })
-                });
-
-                if (uploadUrlResponse.ok) {
-                    const response = await uploadUrlResponse.json();
-                    uploadUrl = response.uploadUrl;
-                    recordingId = response.recordingId;
-                    console.log('Backend mode: Got upload URL from backend');
-                } else {
-                    // Backend returned error, fall back to local mode
-                    console.warn('Backend returned error, falling back to local mode');
-                    recordingId = generateLocalRecordingId();
-                }
-            } catch (backendError) {
-                // Backend fetch failed, fall back to local mode
-                console.warn('Backend unavailable, falling back to local mode:', backendError.message);
-                recordingId = generateLocalRecordingId();
-            }
+        // Build Worker upload URL if R2 Worker is configured
+        if (CONFIG.R2_WORKER_URL && CONFIG.R2_API_KEY) {
+            uploadUrl = `${CONFIG.R2_WORKER_URL}/recordings/${recordingId}.webm`;
+            isLocalMode = false;
+            console.log('Cloud mode: Will upload to R2 Worker');
         } else {
-            // Local-only mode - no backend configured
-            console.log('Local-only mode: No backend configured');
-            recordingId = generateLocalRecordingId();
+            console.log('Local-only mode: R2 Worker not configured');
         }
 
         // Update recording state BEFORE sending to content script
@@ -162,20 +139,20 @@ async function handleStartRecording(data, tabId) {
             uploadUrl: uploadUrl,
             quality: data.quality,
             tabId: tabId,
-            isLocalMode: !uploadUrl
+            isLocalMode: isLocalMode
         };
 
         // Save state to storage
         await chrome.storage.local.set({ recordingState });
 
         // Send message to content script to start recording
-        // The content script will handle getting the media stream
         chrome.tabs.sendMessage(tabId, {
             type: 'RECORDING_STARTED',
             recordingId: recordingId,
             uploadUrl: uploadUrl,
+            apiKey: isLocalMode ? null : CONFIG.R2_API_KEY,
             quality: data.quality,
-            isLocalMode: !uploadUrl
+            isLocalMode: isLocalMode
         });
 
         return {
@@ -186,7 +163,6 @@ async function handleStartRecording(data, tabId) {
 
     } catch (error) {
         console.error('Error starting recording:', error);
-        // Provide more helpful error messages
         if (error.message.includes('Cannot capture a tab with a streaming media source')) {
             throw new Error('Cannot record this tab. Please try refreshing the Google Meet page and try again.');
         } else if (error.message.includes('Extension has not been invoked')) {
@@ -243,42 +219,10 @@ async function handleStopRecording(data) {
             chrome.runtime.onMessage.addListener(listener);
         });
 
-        let taskCount = 0;
-
-        // Only notify backend if not in local mode
-        if (!isLocalMode) {
-            const backendUrl = await getBackendUrl();
-            if (backendUrl) {
-                try {
-                    const authToken = await getAuthToken();
-                    const completeResponse = await fetch(`${backendUrl}/api/recordings/complete`, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${authToken}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            recordingId: recordingId,
-                            meetingId: meetingId,
-                            metadata: data.metadata || {},
-                            participants: data.participants || [],
-                            duration: Date.now() - startTime
-                        })
-                    });
-
-                    if (completeResponse.ok) {
-                        const result = await completeResponse.json();
-                        console.log('Recording completed on backend:', result);
-                        taskCount = result.taskCount || 0;
-                    } else {
-                        console.warn('Backend returned error when completing recording');
-                    }
-                } catch (backendError) {
-                    console.warn('Could not notify backend:', backendError.message);
-                }
-            }
-        } else {
+        if (isLocalMode) {
             console.log('Local mode: Recording saved to Downloads folder');
+        } else {
+            console.log('Cloud mode: Recording uploaded to R2');
         }
 
         // Reset recording state
@@ -296,88 +240,11 @@ async function handleStopRecording(data) {
 
         return {
             success: true,
-            message: isLocalMode ? 'Recording saved to Downloads' : 'Recording stopped and uploaded',
-            taskCount: taskCount
+            message: isLocalMode ? 'Recording saved to Downloads' : 'Recording stopped and uploaded'
         };
 
     } catch (error) {
         console.error('Error stopping recording:', error);
-        throw error;
-    }
-}
-
-// Start MediaRecorder with the captured stream
-async function startMediaRecorder(stream, recordingId, uploadUrl) {
-    try {
-        const options = {
-            mimeType: 'video/webm;codecs=vp9,opus',
-            videoBitsPerSecond: 2500000
-        };
-
-        const mediaRecorder = new MediaRecorder(stream, options);
-        const recordedChunks = [];
-
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-                recordedChunks.push(event.data);
-                console.log('Recorded chunk:', event.data.size, 'bytes');
-            }
-        };
-
-        mediaRecorder.onstop = async () => {
-            console.log('MediaRecorder stopped, uploading...');
-
-            if (recordedChunks.length > 0) {
-                const blob = new Blob(recordedChunks, { type: 'video/webm' });
-                console.log('Total recording size:', blob.size, 'bytes');
-
-                // For now, just log the blob
-                // In production, you would upload to S3/GCS using the uploadUrl
-                // await uploadRecording(blob, uploadUrl);
-            }
-
-            // Stop all tracks
-            stream.getTracks().forEach(track => track.stop());
-        };
-
-        mediaRecorder.onerror = (event) => {
-            console.error('MediaRecorder error:', event.error);
-        };
-
-        // Start recording, request data every 10 seconds
-        mediaRecorder.start(10000);
-
-        // Store the recorder in state
-        recordingState.mediaRecorder = mediaRecorder;
-        recordingState.recordedChunks = recordedChunks;
-
-        console.log('MediaRecorder started successfully');
-
-    } catch (error) {
-        console.error('Failed to start MediaRecorder:', error);
-        throw error;
-    }
-}
-
-// Upload recording to cloud storage
-async function uploadRecording(blob, uploadUrl) {
-    try {
-        // This would upload to S3/GCS in production
-        // For local development, we'll skip the actual upload
-        console.log('Would upload', blob.size, 'bytes to:', uploadUrl);
-
-        // Example S3 upload:
-        // const response = await fetch(uploadUrl, {
-        //     method: 'PUT',
-        //     body: blob,
-        //     headers: {
-        //         'Content-Type': 'video/webm'
-        //     }
-        // });
-
-        return { success: true };
-    } catch (error) {
-        console.error('Upload error:', error);
         throw error;
     }
 }
@@ -415,6 +282,34 @@ async function handleAnalyticsUpload(data) {
         // Don't throw - analytics upload failures shouldn't break the extension
         return { success: false, error: error.message };
     }
+}
+
+// Handle participant data upload to R2
+async function handleParticipantDataUpload(data) {
+    if (!CONFIG.R2_WORKER_URL || !CONFIG.R2_API_KEY) {
+        console.log('R2 not configured, skipping participant data upload');
+        return { success: false, skipped: true };
+    }
+
+    const url = `${CONFIG.R2_WORKER_URL}/participant-data/${data.recordingId}.json`;
+    console.log('Uploading participant data to:', url);
+
+    const response = await fetch(url, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': CONFIG.R2_API_KEY
+        },
+        body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+        throw new Error(`Participant data upload failed: ${response.status} ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    console.log('Participant data uploaded successfully:', result);
+    return { success: true, key: result.key };
 }
 
 // Handle meeting detection

@@ -1,0 +1,10 @@
+name = "laneway-r2-upload"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+
+[[r2_buckets]]
+binding = "RECORDINGS_BUCKET"
+bucket_name = "laneway-recordings"
+
+# API_KEY is stored as a Worker secret — set it with:
+#   npx wrangler secret put API_KEY

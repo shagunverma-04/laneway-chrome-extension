@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:automated-meeting-management-laneway.onrender.com)"
+    ]
+  }
+}

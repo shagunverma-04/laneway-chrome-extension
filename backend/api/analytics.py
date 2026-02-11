@@ -2,14 +2,74 @@
 Analytics API endpoints
 """
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Query
 from datetime import datetime, timedelta
+from typing import Optional
 import json
 
 from api.auth import verify_token
 from database import execute_query, execute_insert
 
 router = APIRouter()
+
+
+@router.get("/api/analytics/meetings")
+async def get_all_meetings():
+    """
+    List all meetings with participant summary (no auth required for local use)
+    """
+    rows = execute_query(
+        """SELECT DISTINCT meeting_id,
+                  MIN(timestamp) as first_seen,
+                  MAX(timestamp) as last_seen,
+                  COUNT(*) as snapshot_count
+           FROM meeting_analytics
+           GROUP BY meeting_id
+           ORDER BY MAX(timestamp) DESC"""
+    )
+    meetings = []
+    for r in rows:
+        meetings.append({
+            "meetingId": r["meeting_id"],
+            "firstSeen": r["first_seen"],
+            "lastSeen": r["last_seen"],
+            "snapshotCount": r["snapshot_count"]
+        })
+    return {"meetings": meetings, "total": len(meetings)}
+
+
+@router.get("/api/analytics/meetings/{meeting_id}")
+async def get_meeting_analytics(meeting_id: str, latest: bool = Query(True, description="If true, return only the latest snapshot")):
+    """
+    Get analytics for a specific meeting. Returns participants with join times, camera, audio status.
+    """
+    if latest:
+        rows = execute_query(
+            "SELECT * FROM meeting_analytics WHERE meeting_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (meeting_id,)
+        )
+    else:
+        rows = execute_query(
+            "SELECT * FROM meeting_analytics WHERE meeting_id = ? ORDER BY timestamp DESC",
+            (meeting_id,)
+        )
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    snapshots = []
+    for r in rows:
+        data = json.loads(r["data"])
+        snapshots.append({
+            "id": r["id"],
+            "meetingId": r["meeting_id"],
+            "timestamp": r["timestamp"],
+            "participantCount": len(data.get("participants", [])),
+            "participants": data.get("participants", [])
+        })
+
+    return {"meetingId": meeting_id, "snapshots": snapshots}
+
 
 @router.post("/api/analytics/upload")
 async def upload_analytics(

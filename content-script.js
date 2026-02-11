@@ -499,7 +499,7 @@ async function handleRecordingStarted(message) {
                     displayStream.getVideoTracks().forEach(track => combinedStream.addTrack(track));
                     audioStream.getAudioTracks().forEach(track => combinedStream.addTrack(track));
 
-                    const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl, isAudioOnly);
+                    const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl, isAudioOnly, message.apiKey);
                     await recorder.startRecording();
 
                     meetingState.recorder = {
@@ -557,7 +557,7 @@ async function handleRecordingStarted(message) {
                 });
 
                 // Use combined stream
-                const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl, isAudioOnly);
+                const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl, isAudioOnly, message.apiKey);
                 await recorder.startRecording();
 
                 // Store recorder state
@@ -587,7 +587,7 @@ async function handleRecordingStarted(message) {
                 }
 
                 // Record without audio
-                const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly);
+                const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly, message.apiKey);
                 await recorder.startRecording();
 
                 meetingState.recorder = {
@@ -603,7 +603,7 @@ async function handleRecordingStarted(message) {
             console.log('Audio settings:', displayStream.getAudioTracks()[0].getSettings());
 
             // Create and start the recorder with tab audio
-            const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly);
+            const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly, message.apiKey);
             await recorder.startRecording();
 
             // Store recorder state
@@ -663,6 +663,11 @@ function handleRecordingStopped(message) {
     console.log('Recording stopped:', message);
 
     if (meetingState.recorder) {
+        // Capture recording info before clearing state
+        const recordingId = meetingState.recorder.recordingId;
+        const startTime = meetingState.recorder.startTime;
+        const duration = Date.now() - startTime;
+
         // Stop the actual MediaRecorder if it exists
         if (meetingState.recorder.mediaRecorder) {
             meetingState.recorder.mediaRecorder.stopRecording();
@@ -680,18 +685,51 @@ function handleRecordingStopped(message) {
 
         meetingState.recorder.isRecording = false;
         meetingState.recorder = null;
+
+        // Send participant data to background for R2 upload
+        sendParticipantData(recordingId, duration);
     }
 
     updateRecordingIndicator(false);
 }
 
+// Gather and send participant data to background script
+function sendParticipantData(recordingId, duration) {
+    const participants = Array.from(meetingState.participants.values()).map(p => ({
+        id: p.id,
+        name: p.name,
+        joinTime: p.joinTime,
+        cameraOn: p.cameraOn,
+        audioMuted: p.audioMuted,
+        cameraOnDuration: p.cameraOnDuration,
+        speakingEvents: p.speakingEvents || []
+    }));
+
+    const payload = {
+        meetingId: meetingState.meetingId,
+        meetingTitle: meetingState.meetingTitle || 'Untitled Meeting',
+        recordingId: recordingId,
+        recordedAt: new Date().toISOString(),
+        duration: duration,
+        participants: participants
+    };
+
+    console.log('Sending participant data:', participants.length, 'participants');
+
+    chrome.runtime.sendMessage({
+        type: 'PARTICIPANT_DATA',
+        data: payload
+    }).catch(err => console.warn('Could not send participant data:', err.message));
+}
+
 // Meeting Recorder Class
 class MeetingRecorder {
-    constructor(stream, recordingId, uploadUrl, isAudioOnly = false) {
+    constructor(stream, recordingId, uploadUrl, isAudioOnly = false, apiKey = null) {
         this.stream = stream;
         this.recordingId = recordingId;
         this.uploadUrl = uploadUrl;
         this.isAudioOnly = isAudioOnly;
+        this.apiKey = apiKey;
         this.mediaRecorder = null;
         this.recordedChunks = [];
         this.startTime = null;
@@ -805,35 +843,7 @@ class MeetingRecorder {
             return;
         }
 
-        // Download locally for now (development mode)
-        try {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = `laneway-recording-${this.recordingId}-${Date.now()}.webm`;
-            document.body.appendChild(a);
-
-            console.log('📥 Triggering download:', a.download);
-            a.click();
-
-            // Show user notification
-            alert(`Recording saved! Check your Downloads folder for:\n${a.download}`);
-
-            // Clean up
-            setTimeout(() => {
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                console.log('✅ Download cleanup complete');
-            }, 100);
-
-            console.log('✅ Recording downloaded locally as:', a.download);
-        } catch (downloadError) {
-            console.error('❌ Download error:', downloadError);
-            alert('Failed to download recording: ' + downloadError.message);
-        }
-
-        // Upload to cloud storage if URL is provided
+        // Try cloud upload first if configured
         if (this.uploadUrl) {
             const maxRetries = 2;
             let uploaded = false;
@@ -841,12 +851,14 @@ class MeetingRecorder {
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
                     console.log(`☁️ Uploading to cloud (attempt ${attempt}/${maxRetries}):`, this.uploadUrl);
+                    const headers = { 'Content-Type': 'video/webm' };
+                    if (this.apiKey) {
+                        headers['X-API-Key'] = this.apiKey;
+                    }
                     const response = await fetch(this.uploadUrl, {
                         method: 'PUT',
                         body: blob,
-                        headers: {
-                            'Content-Type': 'video/webm'
-                        }
+                        headers: headers
                     });
 
                     if (response.ok) {
@@ -867,11 +879,39 @@ class MeetingRecorder {
                 }
             }
 
-            if (!uploaded) {
-                alert('⚠️ Cloud upload failed after retries. Your recording is saved locally in Downloads.');
+            if (uploaded) {
+                alert('Recording uploaded to cloud successfully!');
+                return;
             }
-        } else {
-            console.log('ℹ️ Skipping cloud upload (local mode)');
+
+            // Cloud upload failed — fall back to local download
+            console.warn('⚠️ Cloud upload failed, falling back to local download');
+        }
+
+        // Local download (fallback if cloud fails, or if no upload URL configured)
+        try {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `laneway-recording-${this.recordingId}-${Date.now()}.webm`;
+            document.body.appendChild(a);
+
+            console.log('📥 Triggering local download:', a.download);
+            a.click();
+
+            const reason = this.uploadUrl ? 'Cloud upload failed — saved locally as backup.' : 'Local mode.';
+            alert(`Recording saved to Downloads folder.\n${reason}\nFile: ${a.download}`);
+
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 100);
+
+            console.log('✅ Recording downloaded locally as:', a.download);
+        } catch (downloadError) {
+            console.error('❌ Download error:', downloadError);
+            alert('Failed to save recording: ' + downloadError.message);
         }
     }
 }

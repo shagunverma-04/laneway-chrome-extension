@@ -96,16 +96,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-// Helper: Get backend URL from storage or config
-async function getBackendUrl() {
-    return new Promise((resolve) => {
-        chrome.storage.sync.get(['laneway_backend_url'], (result) => {
-            const url = result.laneway_backend_url || '';
-            resolve(url);
-        });
-    });
-}
-
 // Helper: Generate recording ID using meeting ID
 function generateRecordingId(meetingId) {
     const sanitized = (meetingId || 'unknown').replace(/[^a-zA-Z0-9-]/g, '-');
@@ -249,32 +239,29 @@ async function handleStopRecording(data) {
     }
 }
 
-// Handle analytics data upload
+// Handle analytics data upload — sends to Cloudflare Worker (D1)
 async function handleAnalyticsUpload(data) {
     try {
-        // Check if backend is configured
-        const backendUrl = await getBackendUrl();
-        if (!backendUrl) {
-            // No backend configured, skip analytics upload
-            console.log('Local mode: Skipping analytics upload');
+        if (!CONFIG.R2_WORKER_URL || !CONFIG.R2_API_KEY) {
+            console.log('Worker not configured, skipping analytics upload');
             return { success: true, skipped: true };
         }
 
-        const authToken = await getAuthToken();
-
-        const response = await fetch(`${backendUrl}/api/analytics/upload`, {
+        const response = await fetch(`${CONFIG.R2_WORKER_URL}/analytics`, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${authToken}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-API-Key': CONFIG.R2_API_KEY
             },
             body: JSON.stringify(data)
         });
 
         if (!response.ok) {
-            throw new Error('Failed to upload analytics');
+            throw new Error(`Analytics upload failed: ${response.status} ${response.statusText}`);
         }
 
+        const result = await response.json();
+        console.log('Analytics uploaded:', result);
         return { success: true };
 
     } catch (error) {
@@ -350,16 +337,6 @@ function handleMeetingEnded(data) {
 
     // Clear meeting info
     chrome.storage.local.remove('currentMeeting');
-}
-
-// Helper: Get auth token from storage (returns empty string if not found)
-async function getAuthToken() {
-    return new Promise((resolve) => {
-        chrome.storage.sync.get([CONFIG.STORAGE_KEYS.AUTH_TOKEN], (result) => {
-            const token = result[CONFIG.STORAGE_KEYS.AUTH_TOKEN] || '';
-            resolve(token);
-        });
-    });
 }
 
 // Listen for tab updates to detect when user navigates away from Meet

@@ -6,5 +6,7 @@ compatibility_date = "2024-12-01"
 binding = "RECORDINGS_BUCKET"
 bucket_name = "laneway-recordings"
 
-# API_KEY is stored as a Worker secret — set it with:
-#   npx wrangler secret put API_KEY
+[[d1_databases]]
+binding = "laneway_analytics"
+database_name = "laneway-analytics"
+database_id = "52b91c19-46b7-435d-b48b-07767ee21f8e"

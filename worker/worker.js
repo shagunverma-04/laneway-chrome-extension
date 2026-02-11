@@ -6,7 +6,7 @@ export default {
     // CORS headers for extension requests
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
     };
 
@@ -126,6 +126,73 @@ export default {
             'Content-Type': 'application/json',
           },
         });
+      }
+
+      // ─── Analytics endpoints (D1) ───
+
+      // POST /analytics — store an analytics snapshot
+      if (request.method === 'POST' && path === '/analytics') {
+        const body = await request.json();
+        const meetingId = body.meeting_id || body.meetingId;
+        const timestamp = body.timestamp || new Date().toISOString();
+
+        if (!meetingId) {
+          return Response.json(
+            { error: 'Missing meeting_id' },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        await env.ANALYTICS_DB.prepare(
+          'INSERT INTO meeting_analytics (meeting_id, timestamp, data) VALUES (?, ?, ?)'
+        ).bind(meetingId, timestamp, JSON.stringify(body)).run();
+
+        return Response.json(
+          { success: true, meeting_id: meetingId },
+          { headers: corsHeaders }
+        );
+      }
+
+      // GET /analytics/meetings — list all meetings with snapshot counts
+      if (request.method === 'GET' && path === '/analytics/meetings') {
+        const { results } = await env.ANALYTICS_DB.prepare(
+          `SELECT meeting_id,
+                  COUNT(*) AS snapshot_count,
+                  MIN(created_at) AS first_seen,
+                  MAX(created_at) AS last_seen
+           FROM meeting_analytics
+           GROUP BY meeting_id
+           ORDER BY last_seen DESC`
+        ).all();
+
+        return Response.json({ meetings: results }, { headers: corsHeaders });
+      }
+
+      // GET /analytics/meetings/:id — get all snapshots for a meeting
+      if (request.method === 'GET' && path.startsWith('/analytics/meetings/')) {
+        const meetingId = decodeURIComponent(path.slice('/analytics/meetings/'.length));
+
+        if (!meetingId) {
+          return Response.json(
+            { error: 'Missing meeting ID' },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const { results } = await env.ANALYTICS_DB.prepare(
+          'SELECT id, meeting_id, timestamp, data, created_at FROM meeting_analytics WHERE meeting_id = ? ORDER BY created_at ASC'
+        ).bind(meetingId).all();
+
+        // Parse the JSON data field for each row
+        const snapshots = results.map(row => ({
+          ...row,
+          data: JSON.parse(row.data),
+        }));
+
+        return Response.json(
+          { meeting_id: meetingId, snapshots },
+          { headers: corsHeaders }
+        );
       }
 
       return Response.json(

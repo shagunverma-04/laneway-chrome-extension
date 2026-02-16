@@ -187,10 +187,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'UPLOAD_COMPLETE':
             handleUploadComplete(message)
-                .then(() => console.log('Post-upload metadata sent'))
-                .catch(err => console.warn('Post-upload metadata failed:', err.message));
-            sendResponse({ success: true });
-            return false;
+                .then(() => {
+                    console.log('Post-upload metadata sent');
+                    sendResponse({ success: true });
+                })
+                .catch(err => {
+                    console.warn('Post-upload metadata failed:', err.message);
+                    sendResponse({ success: false, error: err.message });
+                });
+            return true;
 
         case 'PARTICIPANT_DATA':
             handleParticipantDataUpload(message.data)
@@ -416,6 +421,15 @@ async function handleStopRecording(data) {
         const durationMs = Date.now() - startTime;
         const durationSeconds = Math.round(durationMs / 1000);
 
+        // Capture meetingUid NOW before it gets cleared by handleMeetingEnded
+        const { currentMeetingUid } = await chrome.storage.local.get('currentMeetingUid');
+        console.log('Meeting UID at stop time:', currentMeetingUid);
+
+        // Store it separately so handleUploadComplete can use it even after meeting ends
+        if (currentMeetingUid) {
+            await chrome.storage.local.set({ stoppedMeetingUid: currentMeetingUid });
+        }
+
         // Send stop to content script
         try {
             await chrome.tabs.sendMessage(tabId, {
@@ -438,49 +452,29 @@ async function handleStopRecording(data) {
             console.warn('Could not get participant count:', e.message);
         }
 
-        // Wait for upload completion
-        await new Promise((resolve) => {
-            const timeout = setTimeout(() => {
-                console.warn('Upload completion timed out after 60s, proceeding');
-                chrome.runtime.onMessage.removeListener(listener);
-                resolve();
-            }, 60000);
-
-            function listener(msg) {
-                if (msg.type === 'UPLOAD_COMPLETE' && msg.recordingId === recordingId) {
-                    console.log('Upload complete signal received');
-                    clearTimeout(timeout);
-                    chrome.runtime.onMessage.removeListener(listener);
-                    resolve();
-                }
-            }
-
-            chrome.runtime.onMessage.addListener(listener);
-        });
-
-        // Notify backend: recording stopped (if meeting is tracked)
-        const { currentMeetingUid } = await chrome.storage.local.get('currentMeetingUid');
+        // Notify backend: recording stopped → sets status to "processing"
         if (currentMeetingUid) {
-            callBackendAPI('POST', '/api/ext/recording/stop', {
-                meeting_uid: currentMeetingUid,
-                stopped_at: stoppedAt,
-                duration: durationSeconds,
-                participant_count: participantCount
-            }).then(() => {
-                console.log('Backend notified: recording stopped');
-            }).catch(err => {
+            try {
+                await callBackendAPI('POST', '/api/ext/recording/stop', {
+                    meeting_uid: currentMeetingUid,
+                    stopped_at: stoppedAt,
+                    duration: durationSeconds,
+                    participant_count: participantCount
+                });
+                console.log('Backend notified: recording stopped (processing)');
+            } catch (err) {
                 console.warn('Failed to notify backend of recording stop:', err.message);
-            });
+            }
         }
+
+        // Store stopped_at for metadata step
+        await chrome.storage.local.set({ recordingStoppedAt: stoppedAt });
 
         if (isLocalMode) {
             console.log('Local mode: Recording saved to Downloads folder');
         } else {
             console.log('Cloud mode: Recording uploaded to R2');
         }
-
-        // Store stopped_at for metadata step
-        await chrome.storage.local.set({ recordingStoppedAt: stoppedAt });
 
         // Reset recording state
         recordingState = {
@@ -512,8 +506,10 @@ async function handleUploadComplete(message) {
     const recordingId = message.recordingId;
     console.log('Upload complete for:', recordingId);
 
-    const { currentMeetingUid } = await chrome.storage.local.get('currentMeetingUid');
-    if (!currentMeetingUid) {
+    // Use stoppedMeetingUid (preserved at stop time) since currentMeetingUid may be cleared
+    const stored0 = await chrome.storage.local.get(['stoppedMeetingUid', 'currentMeetingUid']);
+    const meetingUid = stored0.stoppedMeetingUid || stored0.currentMeetingUid;
+    if (!meetingUid) {
         console.log('Untracked meeting — skipping metadata upload');
         return;
     }
@@ -560,18 +556,18 @@ async function handleUploadComplete(message) {
 
     try {
         await callBackendAPI('POST', '/api/ext/recording/metadata', {
-            meeting_uid: currentMeetingUid,
+            meeting_uid: meetingUid,
             recording_url: recordingUrl,
             recording_duration: durationSeconds,
             participant_analytics: participantAnalytics
         });
-        console.log('Recording metadata sent to backend');
+        console.log('Recording metadata sent to backend (completed)');
     } catch (error) {
         console.warn('Failed to send recording metadata:', error.message);
     }
 
     // Clean up stored data
-    chrome.storage.local.remove(['recordingStartTime', 'recordingStoppedAt', 'lastParticipantData']);
+    chrome.storage.local.remove(['recordingStartTime', 'recordingStoppedAt', 'lastParticipantData', 'stoppedMeetingUid']);
 }
 
 /**

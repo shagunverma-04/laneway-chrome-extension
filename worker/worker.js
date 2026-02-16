@@ -41,7 +41,7 @@ export default {
 
       // PUT /recordings/<key> — upload a recording blob to R2
       if (request.method === 'PUT' && path.startsWith('/recordings/')) {
-        const key = path.slice(1); // e.g. "recordings/local-123.webm"
+        const key = path.slice(1); // e.g. "recordings/recording_sgg-aeoy-gwc_1768212992.webm"
 
         if (!key || key === 'recordings/') {
           return Response.json(
@@ -72,7 +72,7 @@ export default {
 
       // PUT /participant-data/<key> — upload participant JSON to R2
       if (request.method === 'PUT' && path.startsWith('/participant-data/')) {
-        const key = path.slice(1); // e.g. "participant-data/local-123.json"
+        const key = path.slice(1); // e.g. "participant-data/recording_sgg-aeoy-gwc_1768212992.json"
 
         if (!key || key === 'participant-data/') {
           return Response.json(

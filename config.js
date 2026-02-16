@@ -7,6 +7,9 @@ const CONFIG = {
   // Shared secret that matches the Worker's API_KEY secret
   R2_API_KEY: 'Devlaneway@1234#',
 
+  // Default backend base URL (can be overridden in extension options)
+  BACKEND_BASE_URL: 'http://localhost:8000',
+
   // Recording Settings
   RECORDING: {
     DEFAULT_QUALITY: 'audio-only', // 'audio-only', '720p', '1080p'
@@ -25,9 +28,8 @@ const CONFIG = {
 
   // Storage Keys
   STORAGE_KEYS: {
-    AUTH_TOKEN: 'laneway_auth_token',
-    USER_ID: 'laneway_user_id',
-    USER_EMAIL: 'laneway_user_email',
+    API_KEY: 'laneway_api_key',
+    BASE_URL: 'laneway_base_url',
     SETTINGS: 'laneway_settings',
     MEETING_DATA: 'laneway_meeting_data'
   }

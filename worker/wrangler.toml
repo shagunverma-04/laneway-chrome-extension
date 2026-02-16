@@ -7,6 +7,6 @@ binding = "RECORDINGS_BUCKET"
 bucket_name = "laneway-recordings"
 
 [[d1_databases]]
-binding = "laneway_analytics"
+binding = "ANALYTICS_DB"
 database_name = "laneway-analytics"
 database_id = "52b91c19-46b7-435d-b48b-07767ee21f8e"

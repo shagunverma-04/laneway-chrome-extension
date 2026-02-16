@@ -3,9 +3,28 @@
 
 console.log('Laneway content script loaded');
 
-// Import config (will be available from manifest)
-// Backend URL can be configured in extension settings
-const API_BASE_URL = ''; // Configure in extension settings if using backend features
+// Snapshot of participants preserved across meeting-end race conditions
+let lastParticipantSnapshot = [];
+
+// Convert a Date to Asia/Kolkata ISO string (UTC+5:30 fixed offset)
+function toKolkataISO(date) {
+    const d = date instanceof Date ? date : new Date(date);
+    const utc = d.getTime();
+    const kolkata = new Date(utc + (5.5 * 60 * 60 * 1000));
+    const iso = kolkata.toISOString().replace('Z', '+05:30');
+    return iso;
+}
+
+// Get only the direct text content of an element (not nested children)
+function getDirectTextContent(element) {
+    let text = '';
+    for (const node of element.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            text += node.textContent;
+        }
+    }
+    return text.trim();
+}
 
 // State management
 let meetingState = {
@@ -15,7 +34,8 @@ let meetingState = {
     participants: new Map(),
     analyticsInterval: null,
     recorder: null,
-    absenceManager: null
+    isTracked: false,
+    meetingUid: null
 };
 
 // Initialize when DOM is ready
@@ -34,20 +54,6 @@ function initialize() {
     // Set up observers
     setupMeetingObserver();
     setupParticipantObserver();
-
-    // Initialize absence manager after a delay to ensure class is loaded
-    setTimeout(() => {
-        try {
-            meetingState.absenceManager = new AbsenceManager();
-
-            // Check for absences after initialization
-            if (meetingState.isInMeeting) {
-                meetingState.absenceManager.fetchAbsences();
-            }
-        } catch (error) {
-            console.error('Failed to initialize AbsenceManager:', error);
-        }
-    }, 1000);
 }
 
 // Detect if we're in an active meeting
@@ -58,16 +64,10 @@ function detectMeeting() {
     if (meetingMatch) {
         const meetingId = meetingMatch[1];
 
-        // Check if we're actually in the meeting (not just the lobby)
-        // We'll be aggressive here - if you're on a meeting URL and see ANY meeting controls,
-        // we'll consider you "in the meeting" even if the "ready" dialog is showing
-
-        // Check for bottom control bar (always present)
         const hasControlBar = document.querySelector('[data-meeting-controls]') !== null ||
             document.querySelector('[role="toolbar"]') !== null ||
-            document.querySelector('.VfPpkd-Bz112c-LgbsSe') !== null; // Material button
+            document.querySelector('.VfPpkd-Bz112c-LgbsSe') !== null;
 
-        // Check for specific controls
         const hasMicButton = document.querySelector('[aria-label*="microphone"]') !== null ||
             document.querySelector('[aria-label*="Microphone"]') !== null ||
             document.querySelector('[data-is-muted]') !== null;
@@ -79,11 +79,9 @@ function detectMeeting() {
             document.querySelector('[aria-label*="leave"]') !== null ||
             document.querySelector('[aria-label*="end"]') !== null;
 
-        // Check for meeting container
         const hasMeetingContainer = document.querySelector('.KUfYIc') !== null ||
             document.querySelector('[data-meeting-title]') !== null;
 
-        // If we have ANY of these indicators, we're in a meeting
         const inActiveMeeting = hasControlBar || hasMicButton || hasCameraButton ||
             hasEndCallButton || hasMeetingContainer;
 
@@ -104,7 +102,7 @@ function detectMeeting() {
             meetingState.meetingTitle = meetingTitle;
             meetingState.isInMeeting = true;
 
-            console.log('✅ Meeting detected:', { meetingId, meetingTitle });
+            console.log('Meeting detected:', { meetingId, meetingTitle });
 
             // Notify background script
             chrome.runtime.sendMessage({
@@ -116,21 +114,23 @@ function detectMeeting() {
                 }
             }).catch(err => console.log('Background not ready:', err));
 
+            // Do an initial participant scan immediately
+            updateParticipantList();
+
             // Start analytics tracking
             startAnalyticsTracking();
 
             // Inject recording indicator
             injectRecordingIndicator();
         } else {
-            console.log('❌ In Google Meet lobby, waiting to join...');
+            console.log('In Google Meet lobby, waiting to join...');
             meetingState.isInMeeting = false;
             meetingState.meetingId = meetingId;
             meetingState.meetingTitle = null;
 
-            // Set up a retry mechanism to check again in 2 seconds
             setTimeout(() => {
                 if (!meetingState.isInMeeting) {
-                    console.log('🔄 Retrying meeting detection...');
+                    console.log('Retrying meeting detection...');
                     detectMeeting();
                 }
             }, 2000);
@@ -140,18 +140,32 @@ function detectMeeting() {
 
 // Extract meeting title from page
 function extractMeetingTitle() {
-    // Try multiple selectors
-    const titleSelectors = [
-        '[data-meeting-title]',
-        '.u6vdEc',
-        'div[jsname="r4nke"]'
-    ];
+    const dataTitleEl = document.querySelector('[data-meeting-title]');
+    if (dataTitleEl) {
+        const attrVal = dataTitleEl.getAttribute('data-meeting-title');
+        if (attrVal && attrVal.trim()) {
+            return attrVal.trim();
+        }
+        const directText = getDirectTextContent(dataTitleEl);
+        if (directText) {
+            return directText;
+        }
+    }
 
+    const titleSelectors = ['.u6vdEc', 'div[jsname="r4nke"]'];
     for (const selector of titleSelectors) {
         const element = document.querySelector(selector);
-        if (element && element.textContent.trim()) {
-            return element.textContent.trim();
+        if (element) {
+            const directText = getDirectTextContent(element);
+            if (directText) {
+                return directText;
+            }
         }
+    }
+
+    const urlMatch = window.location.href.match(/meet\.google\.com\/([a-z-]+)/);
+    if (urlMatch) {
+        return urlMatch[1];
     }
 
     return 'Untitled Meeting';
@@ -160,15 +174,12 @@ function extractMeetingTitle() {
 // Set up observer to detect when meeting starts/ends
 function setupMeetingObserver() {
     const observer = new MutationObserver((mutations) => {
-        // Check if we're still in a meeting
         const inMeeting = document.querySelector('[data-meeting-title]') !== null ||
             document.querySelector('.KUfYIc') !== null;
 
         if (!inMeeting && meetingState.isInMeeting) {
-            // Meeting ended
             handleMeetingEnd();
         } else if (inMeeting && !meetingState.isInMeeting) {
-            // Meeting started
             detectMeeting();
         }
     });
@@ -179,28 +190,33 @@ function setupMeetingObserver() {
     });
 }
 
-// Set up observer to track participants
+// Set up observer to track participants (debounced)
 function setupParticipantObserver() {
-    const observer = new MutationObserver((mutations) => {
-        if (meetingState.isInMeeting) {
+    let debounceTimer = null;
+
+    const observer = new MutationObserver(() => {
+        if (!meetingState.isInMeeting) return;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
             updateParticipantList();
-        }
+        }, 2000);
     });
 
-    // Observe the participants panel
-    const observeTarget = document.body;
-    observer.observe(observeTarget, {
+    observer.observe(document.body, {
         childList: true,
         subtree: true,
-        attributes: true,
-        attributeFilter: ['data-participant-id', 'data-requested-participant-id']
+        attributes: true
     });
 }
 
-// Update participant list
+// Update participant list — also tracks leaveTime for participants no longer in DOM
 function updateParticipantList() {
-    // Find participant elements
-    const participantElements = document.querySelectorAll('[data-participant-id], [jsname="V3kXXb"]');
+    const participantElements = document.querySelectorAll(
+        '[data-participant-id], [data-requested-participant-id], [data-self-name], [jsname="V3kXXb"]'
+    );
+
+    // Collect currently visible participant IDs
+    const visibleIds = new Set();
 
     participantElements.forEach(element => {
         const participantId = element.getAttribute('data-participant-id') ||
@@ -210,12 +226,15 @@ function updateParticipantList() {
         const participantName = extractParticipantName(element);
 
         if (participantId && participantName) {
+            visibleIds.add(participantId);
+
             if (!meetingState.participants.has(participantId)) {
                 // New participant joined
+                const now = new Date();
                 const participant = {
                     id: participantId,
                     name: participantName,
-                    joinTime: Date.now(),
+                    joinTime: toKolkataISO(now),
                     leaveTime: null,
                     cameraOn: isParticipantCameraOn(element),
                     audioMuted: isParticipantMuted(element),
@@ -230,7 +249,6 @@ function updateParticipantList() {
                 // Update existing participant
                 const participant = meetingState.participants.get(participantId);
                 const cameraOn = isParticipantCameraOn(element);
-                const audioMuted = isParticipantMuted(element);
 
                 // Track camera duration
                 if (participant.cameraOn && cameraOn) {
@@ -239,25 +257,60 @@ function updateParticipantList() {
                 }
 
                 participant.cameraOn = cameraOn;
-                participant.audioMuted = audioMuted;
+                participant.audioMuted = isParticipantMuted(element);
                 participant.lastCameraCheck = Date.now();
+
+                // Clear leaveTime if participant reappeared
+                if (participant.leaveTime) {
+                    participant.leaveTime = null;
+                    console.log('Participant rejoined:', participantName);
+                }
             }
         }
     });
+
+    // Mark participants no longer visible as left
+    for (const [id, participant] of meetingState.participants) {
+        if (!visibleIds.has(id) && !participant.leaveTime) {
+            participant.leaveTime = toKolkataISO(new Date());
+            console.log('Participant left:', participant.name);
+        }
+    }
 }
 
 // Extract participant name from element
 function extractParticipantName(element) {
+    const selfName = element.getAttribute('data-self-name');
+    if (selfName && selfName.trim()) {
+        return selfName.trim().replace(' (You)', '');
+    }
+
     const nameSelectors = [
         '.zWGUib',
+        '.cS7aqe',
+        '.ZjFb7c',
         '[data-self-name]',
         'div[jsname="YheHge"]'
     ];
 
     for (const selector of nameSelectors) {
         const nameElement = element.querySelector(selector);
-        if (nameElement && nameElement.textContent.trim()) {
-            return nameElement.textContent.trim().replace(' (You)', '');
+        if (nameElement) {
+            const attrName = nameElement.getAttribute('data-self-name');
+            if (attrName && attrName.trim()) {
+                return attrName.trim().replace(' (You)', '');
+            }
+            if (nameElement.textContent.trim()) {
+                return nameElement.textContent.trim().replace(' (You)', '');
+            }
+        }
+    }
+
+    const img = element.querySelector('img[alt]');
+    if (img) {
+        const alt = img.getAttribute('alt');
+        if (alt && alt.trim() && alt !== 'Avatar') {
+            return alt.trim().replace(' (You)', '');
         }
     }
 
@@ -272,7 +325,6 @@ function generateParticipantId(element) {
 
 // Check if participant camera is on
 function isParticipantCameraOn(element) {
-    // Look for video element or camera indicator
     const hasVideo = element.querySelector('video') !== null;
     const cameraOffIcon = element.querySelector('[data-icon="camera_off"]');
     return hasVideo && !cameraOffIcon;
@@ -290,26 +342,32 @@ function startAnalyticsTracking() {
         clearInterval(meetingState.analyticsInterval);
     }
 
-    // Upload analytics every 30 seconds
+    updateParticipantList();
+
     meetingState.analyticsInterval = setInterval(() => {
+        updateParticipantList();
         uploadAnalytics();
     }, 30000);
 }
 
 // Upload analytics data
 async function uploadAnalytics() {
+    const participants = Array.from(meetingState.participants.values()).map(p => ({
+        id: p.id,
+        name: p.name,
+        joinTime: p.joinTime,
+        leaveTime: p.leaveTime,
+        cameraOn: p.cameraOn,
+        audioMuted: p.audioMuted,
+        cameraOnDuration: p.cameraOnDuration,
+        speakingEvents: p.speakingEvents
+    }));
+
     const analyticsData = {
         meetingId: meetingState.meetingId,
-        timestamp: Date.now(),
-        participants: Array.from(meetingState.participants.values()).map(p => ({
-            id: p.id,
-            name: p.name,
-            joinTime: p.joinTime,
-            cameraOn: p.cameraOn,
-            audioMuted: p.audioMuted,
-            cameraOnDuration: p.cameraOnDuration,
-            speakingEvents: p.speakingEvents
-        }))
+        timestamp: toKolkataISO(new Date()),
+        participantCount: participants.length,
+        participants: participants
     };
 
     try {
@@ -330,11 +388,30 @@ function handleMeetingEnd() {
 
     meetingState.isInMeeting = false;
 
-    // Stop analytics tracking
     if (meetingState.analyticsInterval) {
         clearInterval(meetingState.analyticsInterval);
         meetingState.analyticsInterval = null;
     }
+
+    // Set leaveTime for all remaining participants
+    const now = toKolkataISO(new Date());
+    for (const [id, participant] of meetingState.participants) {
+        if (!participant.leaveTime) {
+            participant.leaveTime = now;
+        }
+    }
+
+    // Snapshot participants BEFORE clearing so sendParticipantData can use them
+    lastParticipantSnapshot = Array.from(meetingState.participants.values()).map(p => ({
+        id: p.id,
+        name: p.name,
+        joinTime: p.joinTime,
+        leaveTime: p.leaveTime,
+        cameraOn: p.cameraOn,
+        audioMuted: p.audioMuted,
+        cameraOnDuration: p.cameraOnDuration,
+        speakingEvents: p.speakingEvents || []
+    }));
 
     // Upload final analytics
     uploadAnalytics();
@@ -344,17 +421,19 @@ function handleMeetingEnd() {
         type: 'MEETING_ENDED',
         data: {
             meetingId: meetingState.meetingId,
-            participants: Array.from(meetingState.participants.values())
+            participants: lastParticipantSnapshot
         }
     }).catch(err => console.log('Could not notify background of meeting end:', err));
 
-    // Reset state
-    meetingState.participants.clear();
+    // Only clear participants if no recording is active
+    const isRecording = meetingState.recorder && meetingState.recorder.isRecording;
+    if (!isRecording) {
+        meetingState.participants.clear();
+    }
 }
 
 // Inject recording indicator
 function injectRecordingIndicator() {
-    // Check if already injected
     if (document.getElementById('laneway-recording-indicator')) {
         return;
     }
@@ -362,7 +441,7 @@ function injectRecordingIndicator() {
     const indicator = document.createElement('div');
     indicator.id = 'laneway-recording-indicator';
     indicator.className = 'laneway-indicator';
-    indicator.style.display = 'none'; // Hidden by default
+    indicator.style.display = 'none';
     indicator.innerHTML = `
     <div class="laneway-indicator-content">
       <span class="laneway-recording-dot"></span>
@@ -371,7 +450,6 @@ function injectRecordingIndicator() {
     </div>
   `;
 
-    // Insert into Meet UI
     const meetContainer = document.querySelector('.KUfYIc') || document.body;
     meetContainer.insertAdjacentElement('afterbegin', indicator);
 }
@@ -401,29 +479,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'RECORDING_STARTED':
             handleRecordingStarted(message);
             sendResponse({ success: true });
-            return false; // Synchronous response
+            return false;
 
         case 'RECORDING_STOPPED':
             handleRecordingStopped(message);
             sendResponse({ success: true });
-            return false; // Synchronous response
+            return false;
 
         case 'GET_MEETING_INFO':
             sendResponse({
                 meetingId: meetingState.meetingId,
                 meetingTitle: meetingState.meetingTitle,
                 isInMeeting: meetingState.isInMeeting,
-                participantCount: meetingState.participants.size
+                participantCount: meetingState.participants.size,
+                isTracked: meetingState.isTracked,
+                meetingUid: meetingState.meetingUid
             });
-            return false; // Synchronous response
+            return false;
 
         case 'GET_PARTICIPANTS':
-            // Return participant data for recording completion
             const participants = Array.from(meetingState.participants.values()).map(p => ({
                 id: p.id,
                 name: p.name,
-                email: p.email || null,
                 joinTime: p.joinTime,
+                leaveTime: p.leaveTime,
                 cameraOn: p.cameraOn,
                 audioMuted: p.audioMuted,
                 cameraOnDuration: p.cameraOnDuration,
@@ -431,7 +510,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }));
             console.log('Returning participant data:', participants.length, 'participants');
             sendResponse({ participants });
-            return false; // Synchronous response
+            return false;
+
+        case 'MEETING_TRACKING_STATUS':
+            meetingState.isTracked = message.isTracked;
+            meetingState.meetingUid = message.meetingUid;
+            console.log('Meeting tracking status:', message.isTracked ? 'Tracked' : 'Untracked');
+            sendResponse({ success: true });
+            return false;
 
         default:
             sendResponse({ success: false, error: 'Unknown message type' });
@@ -444,9 +530,6 @@ async function handleRecordingStarted(message) {
     console.log('Recording started:', message);
 
     try {
-        // Use getDisplayMedia to capture the tab/screen
-        // IMPORTANT: getDisplayMedia REQUIRES video to be true (cannot be false)
-        // For audio-only, we still capture video but use a lower bitrate
         const isAudioOnly = message.quality === 'audio-only';
 
         const constraints = {
@@ -456,31 +539,28 @@ async function handleRecordingStarted(message) {
                 height: isAudioOnly ? { ideal: 480 } : { ideal: 1080 }
             },
             audio: {
-                echoCancellation: false,  // Disable to get raw audio
-                noiseSuppression: false,  // Disable to get raw audio
-                autoGainControl: false,   // Disable to get raw audio
-                sampleRate: 48000         // Higher sample rate for better quality
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+                sampleRate: 48000
             }
         };
 
         console.log('Requesting display media with constraints:', constraints);
 
-        // Use getDisplayMedia
         const displayStream = await navigator.mediaDevices.getDisplayMedia(constraints);
-        console.log('✅ Got display stream:', displayStream);
+        console.log('Got display stream:', displayStream);
         console.log('   Audio tracks:', displayStream.getAudioTracks().length);
         console.log('   Video tracks:', displayStream.getVideoTracks().length);
 
-        // Check if audio is present
         const hasAudio = displayStream.getAudioTracks().length > 0;
         const hasVideo = displayStream.getVideoTracks().length > 0;
 
         if (!hasAudio) {
-            console.warn('⚠️ No audio track detected from display!');
-            console.log('🔊 Attempting to capture system audio...');
+            console.warn('No audio track detected from display!');
+            console.log('Attempting to capture system audio...');
 
             try {
-                // Try to get system audio via second getDisplayMedia call
                 const audioStream = await navigator.mediaDevices.getDisplayMedia({
                     video: false,
                     audio: {
@@ -492,9 +572,8 @@ async function handleRecordingStarted(message) {
                 });
 
                 if (audioStream.getAudioTracks().length > 0) {
-                    console.log('✅ Got system audio stream!');
+                    console.log('Got system audio stream!');
 
-                    // Combine video from display and audio from system
                     const combinedStream = new MediaStream();
                     displayStream.getVideoTracks().forEach(track => combinedStream.addTrack(track));
                     audioStream.getAudioTracks().forEach(track => combinedStream.addTrack(track));
@@ -510,9 +589,8 @@ async function handleRecordingStarted(message) {
                         streams: [displayStream, audioStream]
                     };
 
-                    console.log('✅ Recording with system audio');
+                    console.log('Recording with system audio');
 
-                    // Show recording indicator and skip to end
                     updateRecordingIndicator(true);
                     const recordingTimer = setInterval(() => {
                         if (meetingState.recorder && meetingState.recorder.isRecording) {
@@ -523,16 +601,15 @@ async function handleRecordingStarted(message) {
                         }
                     }, 1000);
 
-                    return; // Exit early, recording started successfully
+                    return;
                 }
             } catch (audioError) {
-                console.warn('⚠️ System audio capture failed:', audioError.message);
+                console.warn('System audio capture failed:', audioError.message);
             }
 
-            console.log('🎤 Attempting to capture microphone audio as fallback...');
+            console.log('Attempting to capture microphone audio as fallback...');
 
             try {
-                // Try to get microphone audio as fallback
                 const micStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         echoCancellation: true,
@@ -541,41 +618,36 @@ async function handleRecordingStarted(message) {
                     }
                 });
 
-                console.log('✅ Got microphone audio as fallback');
+                console.log('Got microphone audio as fallback');
 
-                // Combine video from display and audio from microphone
                 const combinedStream = new MediaStream();
 
-                // Add video tracks from display
                 displayStream.getVideoTracks().forEach(track => {
                     combinedStream.addTrack(track);
                 });
 
-                // Add audio tracks from microphone
                 micStream.getAudioTracks().forEach(track => {
                     combinedStream.addTrack(track);
                 });
 
-                // Use combined stream
                 const recorder = new MeetingRecorder(combinedStream, message.recordingId, message.uploadUrl, isAudioOnly, message.apiKey);
                 await recorder.startRecording();
 
-                // Store recorder state
                 meetingState.recorder = {
                     isRecording: true,
                     startTime: Date.now(),
                     recordingId: message.recordingId,
                     mediaRecorder: recorder,
-                    streams: [displayStream, micStream]  // Keep references to stop later
+                    streams: [displayStream, micStream]
                 };
 
-                console.log('✅ Recording with microphone audio (tab audio not available)');
+                console.log('Recording with microphone audio (tab audio not available)');
 
             } catch (micError) {
-                console.error('❌ Failed to get microphone audio:', micError);
+                console.error('Failed to get microphone audio:', micError);
 
                 const continueAnyway = confirm(
-                    '⚠️ No audio available!\n\n' +
+                    'No audio available!\n\n' +
                     'Tab audio: Not shared\n' +
                     'Microphone: Permission denied\n\n' +
                     'Continue recording without audio?'
@@ -586,7 +658,6 @@ async function handleRecordingStarted(message) {
                     throw new Error('Recording cancelled - no audio');
                 }
 
-                // Record without audio
                 const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly, message.apiKey);
                 await recorder.startRecording();
 
@@ -602,11 +673,9 @@ async function handleRecordingStarted(message) {
             console.log('Audio track found:', displayStream.getAudioTracks()[0].label);
             console.log('Audio settings:', displayStream.getAudioTracks()[0].getSettings());
 
-            // Create and start the recorder with tab audio
             const recorder = new MeetingRecorder(displayStream, message.recordingId, message.uploadUrl, isAudioOnly, message.apiKey);
             await recorder.startRecording();
 
-            // Store recorder state
             meetingState.recorder = {
                 isRecording: true,
                 startTime: Date.now(),
@@ -617,13 +686,11 @@ async function handleRecordingStarted(message) {
         }
 
         if (!hasVideo && message.quality !== 'audio-only') {
-            console.warn('⚠️ No video track detected!');
+            console.warn('No video track detected!');
         }
 
-        // Show recording indicator
         updateRecordingIndicator(true);
 
-        // Update recording time every second
         const recordingTimer = setInterval(() => {
             if (meetingState.recorder && meetingState.recorder.isRecording) {
                 const duration = Math.floor((Date.now() - meetingState.recorder.startTime) / 1000);
@@ -634,9 +701,8 @@ async function handleRecordingStarted(message) {
         }, 1000);
 
     } catch (error) {
-        console.error('❌ Failed to start recording:', error);
+        console.error('Failed to start recording:', error);
 
-        // Show user-friendly error message
         let errorMessage = 'Failed to start recording: ';
         if (error.name === 'NotAllowedError') {
             errorMessage += 'Permission denied. Please allow screen sharing.';
@@ -650,7 +716,6 @@ async function handleRecordingStarted(message) {
 
         alert(errorMessage);
 
-        // Notify background that recording failed
         chrome.runtime.sendMessage({
             type: 'RECORDING_FAILED',
             error: error.message
@@ -663,17 +728,14 @@ function handleRecordingStopped(message) {
     console.log('Recording stopped:', message);
 
     if (meetingState.recorder) {
-        // Capture recording info before clearing state
         const recordingId = meetingState.recorder.recordingId;
         const startTime = meetingState.recorder.startTime;
         const duration = Date.now() - startTime;
 
-        // Stop the actual MediaRecorder if it exists
         if (meetingState.recorder.mediaRecorder) {
             meetingState.recorder.mediaRecorder.stopRecording();
         }
 
-        // Stop all streams (display and microphone if used)
         if (meetingState.recorder.streams) {
             meetingState.recorder.streams.forEach(stream => {
                 stream.getTracks().forEach(track => {
@@ -686,7 +748,6 @@ function handleRecordingStopped(message) {
         meetingState.recorder.isRecording = false;
         meetingState.recorder = null;
 
-        // Send participant data to background for R2 upload
         sendParticipantData(recordingId, duration);
     }
 
@@ -695,23 +756,41 @@ function handleRecordingStopped(message) {
 
 // Gather and send participant data to background script
 function sendParticipantData(recordingId, duration) {
-    const participants = Array.from(meetingState.participants.values()).map(p => ({
+    // Set leaveTime for participants still present
+    const now = toKolkataISO(new Date());
+
+    // Use live map first; fall back to snapshot if map was already cleared
+    let participants = Array.from(meetingState.participants.values()).map(p => ({
         id: p.id,
         name: p.name,
         joinTime: p.joinTime,
+        leaveTime: p.leaveTime || now,
         cameraOn: p.cameraOn,
         audioMuted: p.audioMuted,
         cameraOnDuration: p.cameraOnDuration,
         speakingEvents: p.speakingEvents || []
     }));
 
+    if (participants.length === 0 && lastParticipantSnapshot.length > 0) {
+        console.log('Live participant map empty, using snapshot');
+        participants = lastParticipantSnapshot;
+    }
+
+    const snapshotId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     const payload = {
         meetingId: meetingState.meetingId,
         meetingTitle: meetingState.meetingTitle || 'Untitled Meeting',
         recordingId: recordingId,
-        recordedAt: new Date().toISOString(),
+        recordedAt: toKolkataISO(new Date()),
         duration: duration,
-        participants: participants
+        participants: participants,
+        snapshots: [{
+            id: snapshotId,
+            timestamp: toKolkataISO(new Date()),
+            participantCount: participants.length,
+            participants: participants
+        }]
     };
 
     console.log('Sending participant data:', participants.length, 'participants');
@@ -739,14 +818,12 @@ class MeetingRecorder {
 
     async startRecording() {
         try {
-            // Choose appropriate options based on recording type
             let options;
             if (this.isAudioOnly) {
-                // For audio-only, use lower bitrate
                 options = {
                     mimeType: 'video/webm;codecs=vp9,opus',
-                    videoBitsPerSecond: 100000,  // Low video bitrate for audio-only
-                    audioBitsPerSecond: 128000   // Good audio quality
+                    videoBitsPerSecond: 100000,
+                    audioBitsPerSecond: 128000
                 };
             } else {
                 options = {
@@ -755,7 +832,6 @@ class MeetingRecorder {
                 };
             }
 
-            // Check if the mimeType is supported
             if (!MediaRecorder.isTypeSupported(options.mimeType)) {
                 console.warn('VP9 not supported, falling back to VP8');
                 options.mimeType = 'video/webm;codecs=vp8,opus';
@@ -768,16 +844,15 @@ class MeetingRecorder {
             this.mediaRecorder.ondataavailable = (event) => {
                 if (event.data && event.data.size > 0) {
                     this.recordedChunks.push(event.data);
-                    console.log(`📹 Chunk ${this.recordedChunks.length}: ${event.data.size} bytes`);
+                    console.log(`Chunk ${this.recordedChunks.length}: ${event.data.size} bytes`);
                 } else {
-                    console.warn('⚠️ Empty chunk received');
+                    console.warn('Empty chunk received');
                 }
             };
 
             this.mediaRecorder.onstop = async () => {
-                console.log('🛑 MediaRecorder stopped, total chunks:', this.recordedChunks.length);
+                console.log('MediaRecorder stopped, total chunks:', this.recordedChunks.length);
                 await this.uploadChunks();
-                // Notify background that upload is complete
                 try {
                     await chrome.runtime.sendMessage({
                         type: 'UPLOAD_COMPLETE',
@@ -789,25 +864,24 @@ class MeetingRecorder {
             };
 
             this.mediaRecorder.onerror = (event) => {
-                console.error('❌ MediaRecorder error:', event.error);
+                console.error('MediaRecorder error:', event.error);
                 alert('Recording error: ' + event.error);
             };
 
-            // Request data every 5 minutes (or when stopped)
             this.mediaRecorder.start(5 * 60 * 1000);
 
-            console.log('✅ MediaRecorder started successfully');
+            console.log('MediaRecorder started successfully');
             console.log('   MIME type:', options.mimeType);
             console.log('   State:', this.mediaRecorder.state);
 
         } catch (error) {
-            console.error('❌ Failed to start MediaRecorder:', error);
+            console.error('Failed to start MediaRecorder:', error);
             throw error;
         }
     }
 
     stopRecording() {
-        console.log('🛑 Stopping recording...');
+        console.log('Stopping recording...');
 
         if (this.mediaRecorder && this.isRecording) {
             console.log('   Current state:', this.mediaRecorder.state);
@@ -819,9 +893,9 @@ class MeetingRecorder {
                 console.log('   Stopped track:', track.kind);
             });
             this.isRecording = false;
-            console.log('✅ MediaRecorder stopped');
+            console.log('MediaRecorder stopped');
         } else {
-            console.warn('⚠️ No active recording to stop');
+            console.warn('No active recording to stop');
         }
     }
 
@@ -829,16 +903,16 @@ class MeetingRecorder {
         console.log('uploadChunks called, chunks:', this.recordedChunks.length);
 
         if (this.recordedChunks.length === 0) {
-            console.warn('⚠️ No chunks to upload!');
+            console.warn('No chunks to upload!');
             alert('No recording data captured. Try recording for at least 5 seconds.');
             return;
         }
 
         const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
-        console.log('✅ Recording blob created:', blob.size, 'bytes');
+        console.log('Recording blob created:', blob.size, 'bytes');
 
         if (blob.size === 0) {
-            console.error('❌ Blob is empty!');
+            console.error('Blob is empty!');
             alert('Recording failed - no data captured');
             return;
         }
@@ -850,7 +924,7 @@ class MeetingRecorder {
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
-                    console.log(`☁️ Uploading to cloud (attempt ${attempt}/${maxRetries}):`, this.uploadUrl);
+                    console.log(`Uploading to cloud (attempt ${attempt}/${maxRetries}):`, this.uploadUrl);
                     const headers = { 'Content-Type': 'video/webm' };
                     if (this.apiKey) {
                         headers['X-API-Key'] = this.apiKey;
@@ -862,18 +936,17 @@ class MeetingRecorder {
                     });
 
                     if (response.ok) {
-                        console.log('✅ Recording uploaded to cloud successfully');
+                        console.log('Recording uploaded to cloud successfully');
                         this.recordedChunks = [];
                         uploaded = true;
                         break;
                     } else {
-                        console.error(`❌ Cloud upload attempt ${attempt} failed:`, response.status, response.statusText);
+                        console.error(`Cloud upload attempt ${attempt} failed:`, response.status, response.statusText);
                     }
                 } catch (error) {
-                    console.error(`❌ Cloud upload attempt ${attempt} error:`, error.message);
+                    console.error(`Cloud upload attempt ${attempt} error:`, error.message);
                 }
 
-                // Wait before retry
                 if (attempt < maxRetries) {
                     await new Promise(r => setTimeout(r, 2000));
                 }
@@ -884,8 +957,7 @@ class MeetingRecorder {
                 return;
             }
 
-            // Cloud upload failed — fall back to local download
-            console.warn('⚠️ Cloud upload failed, falling back to local download');
+            console.warn('Cloud upload failed, falling back to local download');
         }
 
         // Local download (fallback if cloud fails, or if no upload URL configured)
@@ -894,13 +966,13 @@ class MeetingRecorder {
             const a = document.createElement('a');
             a.style.display = 'none';
             a.href = url;
-            a.download = `laneway-recording-${this.recordingId}-${Date.now()}.webm`;
+            a.download = `${this.recordingId}.webm`;
             document.body.appendChild(a);
 
-            console.log('📥 Triggering local download:', a.download);
+            console.log('Triggering local download:', a.download);
             a.click();
 
-            const reason = this.uploadUrl ? 'Cloud upload failed — saved locally as backup.' : 'Local mode.';
+            const reason = this.uploadUrl ? 'Cloud upload failed - saved locally as backup.' : 'Local mode.';
             alert(`Recording saved to Downloads folder.\n${reason}\nFile: ${a.download}`);
 
             setTimeout(() => {
@@ -908,201 +980,10 @@ class MeetingRecorder {
                 URL.revokeObjectURL(url);
             }, 100);
 
-            console.log('✅ Recording downloaded locally as:', a.download);
+            console.log('Recording downloaded locally as:', a.download);
         } catch (downloadError) {
-            console.error('❌ Download error:', downloadError);
+            console.error('Download error:', downloadError);
             alert('Failed to save recording: ' + downloadError.message);
-        }
-    }
-}
-
-// Absence Manager Class
-class AbsenceManager {
-    constructor() {
-        this.absences = [];
-        this.meetingId = this.extractMeetingId();
-    }
-
-    extractMeetingId() {
-        const url = window.location.href;
-        const match = url.match(/meet\.google\.com\/([a-z-]+)/);
-        return match ? match[1] : null;
-    }
-
-    async fetchAbsences() {
-        if (!this.meetingId) return;
-
-        // Get backend URL from storage
-        const backendUrl = await this.getBackendUrl();
-        if (!backendUrl) {
-            console.log('No backend configured, skipping absence fetch');
-            return;
-        }
-
-        try {
-            const authToken = await this.getAuthToken();
-
-            const response = await fetch(
-                `${backendUrl}/api/absences/meeting/${this.meetingId}`,
-                {
-                    headers: {
-                        'Authorization': `Bearer ${authToken}`
-                    }
-                }
-            );
-
-            if (!response.ok) {
-                console.error('Failed to fetch absences:', response.statusText);
-                return;
-            }
-
-            const data = await response.json();
-            this.absences = data.absences || [];
-
-            if (this.absences.length > 0) {
-                this.displayAbsences();
-                this.markAsShown();
-            }
-        } catch (error) {
-            console.error('Failed to fetch absences:', error);
-        }
-    }
-
-    async getAuthToken() {
-        return new Promise((resolve) => {
-            chrome.storage.sync.get(['laneway_auth_token'], (result) => {
-                resolve(result.laneway_auth_token || '');
-            });
-        });
-    }
-
-    async getBackendUrl() {
-        return new Promise((resolve) => {
-            chrome.storage.sync.get(['laneway_backend_url'], (result) => {
-                resolve(result.laneway_backend_url || '');
-            });
-        });
-    }
-
-    displayAbsences() {
-        // Remove existing banner if any
-        const existingBanner = document.getElementById('laneway-absence-banner');
-        if (existingBanner) {
-            existingBanner.remove();
-        }
-
-        const banner = this.createAbsenceBanner();
-
-        // Insert at top of Google Meet interface
-        const meetContainer = document.querySelector('.KUfYIc') || document.body;
-        meetContainer.insertAdjacentElement('afterbegin', banner);
-    }
-
-    createAbsenceBanner() {
-        const banner = document.createElement('div');
-        banner.id = 'laneway-absence-banner';
-        banner.className = 'laneway-absence-banner';
-
-        const title = document.createElement('div');
-        title.className = 'laneway-absence-title';
-        title.innerHTML = `
-      <span class="laneway-absence-icon">ℹ️</span>
-      ${this.absences.length} team member${this.absences.length > 1 ? 's' : ''} 
-      ${this.absences.length > 1 ? 'are' : 'is'} absent
-    `;
-
-        const absenceList = document.createElement('div');
-        absenceList.className = 'laneway-absence-list';
-
-        this.absences.forEach(absence => {
-            const item = document.createElement('div');
-            item.className = 'laneway-absence-item';
-
-            const reasonIcon = this.getReasonIcon(absence.absence_type);
-
-            item.innerHTML = `
-        <div class="laneway-absence-content">
-          <div class="laneway-absence-main">
-            <strong>${absence.employee_name}</strong> 
-            <span class="laneway-absence-dept">(${absence.department})</span>
-            <div class="laneway-absence-reason">
-              ${reasonIcon} ${absence.reason}
-            </div>
-            ${absence.expected_duration !== 'all_meeting' ?
-                    `<div class="laneway-absence-duration">
-                Duration: ${absence.expected_duration}
-              </div>` : ''
-                }
-            ${absence.alternative_contact ?
-                    `<div class="laneway-absence-contact">
-                Contact: ${absence.alternative_contact}
-              </div>` : ''
-                }
-          </div>
-          <div class="laneway-absence-time">
-            Informed ${this.formatTime(absence.informed_at)}
-          </div>
-        </div>
-      `;
-
-            absenceList.appendChild(item);
-        });
-
-        banner.appendChild(title);
-        banner.appendChild(absenceList);
-
-        // Add close button
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'laneway-absence-close';
-        closeBtn.innerHTML = '✕';
-        closeBtn.onclick = () => banner.remove();
-        banner.appendChild(closeBtn);
-
-        return banner;
-    }
-
-    getReasonIcon(absenceType) {
-        const icons = {
-            'sick': '🤒',
-            'vacation': '🏖️',
-            'conflict': '📅',
-            'emergency': '🚨',
-            'other': '📝'
-        };
-        return icons[absenceType] || '📝';
-    }
-
-    formatTime(timestamp) {
-        const date = new Date(timestamp);
-        const now = new Date();
-        const diffHours = (now - date) / (1000 * 60 * 60);
-
-        if (diffHours < 1) return 'just now';
-        if (diffHours < 24) return `${Math.floor(diffHours)}h ago`;
-        if (diffHours < 48) return 'yesterday';
-        return date.toLocaleDateString();
-    }
-
-    async markAsShown() {
-        const backendUrl = await this.getBackendUrl();
-        if (!backendUrl) return;
-
-        try {
-            const authToken = await this.getAuthToken();
-
-            await fetch(`${backendUrl}/api/absences/mark-shown`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${authToken}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    meeting_id: this.meetingId,
-                    absence_ids: this.absences.map(a => a.id)
-                })
-            });
-        } catch (error) {
-            console.error('Failed to mark absences as shown:', error);
         }
     }
 }

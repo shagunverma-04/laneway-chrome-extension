@@ -85,13 +85,23 @@ async def upload_analytics(
     # Store analytics snapshot
     import uuid
     analytics_id = str(uuid.uuid4())
-    
+
+    # Handle both ISO string and Unix-ms timestamp formats
+    raw_ts = data.get('timestamp')
+    if isinstance(raw_ts, str):
+        # Already an ISO string (e.g. "2026-02-12T18:30:00.000+05:30")
+        ts_iso = raw_ts
+    elif isinstance(raw_ts, (int, float)) and raw_ts > 0:
+        ts_iso = datetime.fromtimestamp(raw_ts / 1000).isoformat()
+    else:
+        ts_iso = datetime.now().isoformat()
+
     execute_insert(
         "INSERT INTO meeting_analytics (id, meeting_id, timestamp, data) VALUES (?, ?, ?, ?)",
         (
             analytics_id,
             data.get('meetingId'),
-            datetime.fromtimestamp(data.get('timestamp', 0) / 1000).isoformat(),
+            ts_iso,
             json.dumps(data)
         )
     )

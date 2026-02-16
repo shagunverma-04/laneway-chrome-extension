@@ -85,8 +85,8 @@ def verify_token(authorization: str):
     
     token = authorization.split(' ')[1]
     
-    # For demo mode
-    if token == "demo-token-12345":
+    # For demo / local-mode tokens
+    if token in ("demo-token-12345", "local-mode"):
         return {
             "sub": "demo-user-123",
             "email": "demo@laneway.com"

@@ -1,5 +1,5 @@
 // Background Service Worker for Laneway Extension
-// Handles recording state, message passing, and cloud uploads
+// Handles recording state, message passing, cloud uploads, and backend API integration
 
 importScripts('config.js');
 
@@ -11,7 +11,127 @@ let recordingState = {
     recordingId: null
 };
 
-// Listen for messages from content script and popup
+// ─── API Helper ────────────────────────────────────────────────────────────────
+
+/**
+ * Call the Laneway backend API with X-API-Key auth and exponential backoff.
+ * Reads apiKey and baseUrl from chrome.storage.sync.
+ * On persistent failure, queues the request in pendingUploads.
+ */
+async function callBackendAPI(method, path, body = null) {
+    const { laneway_api_key: apiKey, laneway_base_url: baseUrl } =
+        await chrome.storage.sync.get(['laneway_api_key', 'laneway_base_url']);
+
+    if (!apiKey) {
+        throw new Error('No API key configured');
+    }
+
+    const url = `${baseUrl || CONFIG.BACKEND_BASE_URL}${path}`;
+    const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
+    const options = { method, headers };
+    if (body) options.body = JSON.stringify(body);
+
+    const MAX_RETRIES = 3;
+    let lastError;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+            const response = await fetch(url, options);
+
+            if (response.ok) {
+                return await response.json();
+            }
+
+            // Don't retry client errors (4xx) except 429
+            if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+                const errorBody = await response.text().catch(() => '');
+                const err = new Error(`API ${response.status}: ${errorBody}`);
+                err.status = response.status;
+                throw err;
+            }
+
+            // Retry on 5xx and 429
+            lastError = new Error(`API ${response.status}`);
+            lastError.status = response.status;
+        } catch (error) {
+            if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) {
+                throw error; // Don't retry client errors
+            }
+            lastError = error;
+        }
+
+        // Exponential backoff: 1s, 2s, 4s
+        if (attempt < MAX_RETRIES - 1) {
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        }
+    }
+
+    // All retries failed — queue for later
+    await queuePendingUpload(method, path, body);
+    throw lastError;
+}
+
+/**
+ * Queue a failed API call for retry later.
+ */
+async function queuePendingUpload(method, path, body) {
+    const { pendingUploads = [] } = await chrome.storage.local.get('pendingUploads');
+    pendingUploads.push({ method, path, body, queuedAt: Date.now() });
+    await chrome.storage.local.set({ pendingUploads });
+    console.log('Queued pending upload:', method, path);
+}
+
+/**
+ * Retry all pending uploads. Called on service worker startup.
+ */
+async function retryPendingUploads() {
+    const { pendingUploads = [] } = await chrome.storage.local.get('pendingUploads');
+    if (pendingUploads.length === 0) return;
+
+    console.log(`Retrying ${pendingUploads.length} pending uploads...`);
+    const remaining = [];
+
+    for (const item of pendingUploads) {
+        try {
+            const { laneway_api_key: apiKey, laneway_base_url: baseUrl } =
+                await chrome.storage.sync.get(['laneway_api_key', 'laneway_base_url']);
+
+            if (!apiKey) {
+                remaining.push(item);
+                continue;
+            }
+
+            const url = `${baseUrl || CONFIG.BACKEND_BASE_URL}${item.path}`;
+            const options = {
+                method: item.method,
+                headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' }
+            };
+            if (item.body) options.body = JSON.stringify(item.body);
+
+            const response = await fetch(url, options);
+            if (response.ok) {
+                console.log('Pending upload succeeded:', item.path);
+            } else {
+                console.warn('Pending upload still failing:', item.path, response.status);
+                remaining.push(item);
+            }
+        } catch (error) {
+            console.warn('Pending upload retry error:', item.path, error.message);
+            remaining.push(item);
+        }
+    }
+
+    await chrome.storage.local.set({ pendingUploads: remaining });
+    if (remaining.length > 0) {
+        console.log(`${remaining.length} uploads still pending`);
+    }
+}
+
+// Retry pending uploads on startup
+retryPendingUploads();
+
+// ─── Message Listener ──────────────────────────────────────────────────────────
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('Background received message:', message);
 
@@ -19,12 +139,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'START_RECORDING':
             // Handle message from popup (no sender.tab) or content script (has sender.tab)
             if (sender.tab && sender.tab.id) {
-                // Message from content script
                 handleStartRecording(message.data, sender.tab.id)
                     .then(sendResponse)
                     .catch(error => sendResponse({ success: false, error: error.message }));
             } else {
-                // Message from popup - need to get active tab
                 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                     if (tabs[0]) {
                         handleStartRecording(message.data, tabs[0].id)
@@ -35,7 +153,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     }
                 });
             }
-            return true; // Keep channel open for async response
+            return true;
 
         case 'STOP_RECORDING':
             handleStopRecording(message.data)
@@ -45,7 +163,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'GET_RECORDING_STATE':
             sendResponse({ state: recordingState });
-            return false; // Synchronous response
+            return false;
 
         case 'UPLOAD_ANALYTICS':
             handleAnalyticsUpload(message.data)
@@ -54,18 +172,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
 
         case 'MEETING_DETECTED':
-            handleMeetingDetected(message.data, sender.tab.id);
-            sendResponse({ success: true });
-            return false; // Synchronous response
+            handleMeetingDetected(message.data, sender.tab?.id)
+                .then(() => sendResponse({ success: true }))
+                .catch(err => {
+                    console.error('MEETING_DETECTED handler failed:', err);
+                    sendResponse({ success: false, error: err.message });
+                });
+            return true;
 
         case 'MEETING_ENDED':
             handleMeetingEnded(message.data);
             sendResponse({ success: true });
-            return false; // Synchronous response
+            return false;
 
         case 'UPLOAD_COMPLETE':
-            // Handled by the listener in handleStopRecording
-            console.log('Upload complete for:', message.recordingId);
+            handleUploadComplete(message)
+                .then(() => console.log('Post-upload metadata sent'))
+                .catch(err => console.warn('Post-upload metadata failed:', err.message));
             sendResponse({ success: true });
             return false;
 
@@ -78,7 +201,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'RECORDING_FAILED':
             console.error('Recording failed:', message.error);
-            // Reset recording state
             recordingState = {
                 isRecording: false,
                 meetingId: null,
@@ -89,6 +211,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: true });
             return false;
 
+        case 'GET_MEETING_TRACKING_STATUS':
+            chrome.storage.local.get(['currentMeetingUid'], (result) => {
+                sendResponse({
+                    isTracked: !!result.currentMeetingUid,
+                    meetingUid: result.currentMeetingUid || null
+                });
+            });
+            return true;
+
         default:
             console.log('Unknown message type:', message.type);
             sendResponse({ success: false, error: 'Unknown message type' });
@@ -96,13 +227,96 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-// Helper: Generate recording ID using meeting ID
+// ─── Recording ID ──────────────────────────────────────────────────────────────
+
 function generateRecordingId(meetingId) {
     const sanitized = (meetingId || 'unknown').replace(/[^a-zA-Z0-9-]/g, '-');
     return `recording_${sanitized}_${Date.now()}`;
 }
 
-// Handle recording start
+// ─── Meeting Detection & Lookup ────────────────────────────────────────────────
+
+async function handleMeetingDetected(data, tabId) {
+    console.log('Meeting detected:', data);
+
+    // Store basic meeting info
+    chrome.storage.local.set({
+        currentMeeting: {
+            meetingId: data.meetingId,
+            meetingTitle: data.meetingTitle,
+            startTime: Date.now(),
+            tabId: tabId,
+            meetUrl: data.url
+        }
+    });
+
+    // Attempt backend lookup
+    try {
+        const meetLink = data.url || `https://meet.google.com/${data.meetingId}`;
+        console.log('Looking up meeting:', meetLink);
+
+        const { laneway_api_key: apiKey, laneway_base_url: baseUrl } =
+            await chrome.storage.sync.get(['laneway_api_key', 'laneway_base_url']);
+        console.log('API config:', { hasKey: !!apiKey, baseUrl: baseUrl || CONFIG.BACKEND_BASE_URL });
+
+        const result = await callBackendAPI('GET', `/api/ext/meeting/lookup?meet_link=${encodeURIComponent(meetLink)}`);
+
+        // Meeting found — store UID
+        const meetingUid = result.meeting_uid || result.uid;
+        await chrome.storage.local.set({ currentMeetingUid: meetingUid });
+        console.log('Meeting tracked, UID:', meetingUid);
+
+        // Notify popup / content script
+        if (tabId) {
+            try {
+                chrome.tabs.sendMessage(tabId, {
+                    type: 'MEETING_TRACKING_STATUS',
+                    isTracked: true,
+                    meetingUid: meetingUid
+                });
+            } catch (e) { /* content script may not be listening */ }
+        }
+
+    } catch (error) {
+        console.error('Meeting lookup error:', error.message, 'status:', error.status);
+        await chrome.storage.local.set({ currentMeetingUid: null });
+
+        if (tabId) {
+            try {
+                chrome.tabs.sendMessage(tabId, {
+                    type: 'MEETING_TRACKING_STATUS',
+                    isTracked: false,
+                    meetingUid: null
+                });
+            } catch (e) { /* content script may not be listening */ }
+        }
+    }
+
+    // Check auto-start
+    chrome.storage.sync.get([CONFIG.STORAGE_KEYS.SETTINGS], (result) => {
+        const settings = result[CONFIG.STORAGE_KEYS.SETTINGS] || {};
+        if (settings.autoStart) {
+            handleStartRecording({
+                meetingId: data.meetingId,
+                quality: settings.quality || CONFIG.RECORDING.DEFAULT_QUALITY
+            }, tabId);
+        }
+    });
+}
+
+function handleMeetingEnded(data) {
+    console.log('Meeting ended:', data);
+
+    if (recordingState.isRecording) {
+        handleStopRecording(data);
+    }
+
+    // Clear meeting tracking info
+    chrome.storage.local.remove(['currentMeeting', 'currentMeetingUid', 'recordingStartTime']);
+}
+
+// ─── Recording Start ───────────────────────────────────────────────────────────
+
 async function handleStartRecording(data, tabId) {
     try {
         console.log('Starting recording for tab:', tabId);
@@ -111,7 +325,6 @@ async function handleStartRecording(data, tabId) {
         let uploadUrl = null;
         let isLocalMode = true;
 
-        // Build Worker upload URL if R2 Worker is configured
         if (CONFIG.R2_WORKER_URL && CONFIG.R2_API_KEY) {
             uploadUrl = `${CONFIG.R2_WORKER_URL}/recordings/${recordingId}.webm`;
             isLocalMode = false;
@@ -120,7 +333,8 @@ async function handleStartRecording(data, tabId) {
             console.log('Local-only mode: R2 Worker not configured');
         }
 
-        // Update recording state BEFORE sending to content script
+        const startedAt = new Date().toISOString();
+
         recordingState = {
             isRecording: true,
             meetingId: data.meetingId,
@@ -132,10 +346,12 @@ async function handleStartRecording(data, tabId) {
             isLocalMode: isLocalMode
         };
 
-        // Save state to storage
-        await chrome.storage.local.set({ recordingState });
+        await chrome.storage.local.set({
+            recordingState,
+            recordingStartTime: startedAt
+        });
 
-        // Send message to content script to start recording
+        // Send to content script to start MediaRecorder
         chrome.tabs.sendMessage(tabId, {
             type: 'RECORDING_STARTED',
             recordingId: recordingId,
@@ -144,6 +360,24 @@ async function handleStartRecording(data, tabId) {
             quality: data.quality,
             isLocalMode: isLocalMode
         });
+
+        // Notify backend: recording started (if meeting is tracked)
+        const { currentMeetingUid } = await chrome.storage.local.get('currentMeetingUid');
+        if (currentMeetingUid) {
+            const { currentMeeting } = await chrome.storage.local.get('currentMeeting');
+            const meetLink = (currentMeeting && currentMeeting.meetUrl) ||
+                `https://meet.google.com/${data.meetingId}`;
+
+            callBackendAPI('POST', '/api/ext/recording/start', {
+                meeting_uid: currentMeetingUid,
+                meet_link: meetLink,
+                started_at: startedAt
+            }).then(() => {
+                console.log('Backend notified: recording started');
+            }).catch(err => {
+                console.warn('Failed to notify backend of recording start:', err.message);
+            });
+        }
 
         return {
             success: true,
@@ -162,7 +396,8 @@ async function handleStartRecording(data, tabId) {
     }
 }
 
-// Handle recording stop
+// ─── Recording Stop ────────────────────────────────────────────────────────────
+
 async function handleStopRecording(data) {
     try {
         console.log('Stopping recording:', recordingState.recordingId);
@@ -174,11 +409,14 @@ async function handleStopRecording(data) {
 
         const tabId = recordingState.tabId;
         const recordingId = recordingState.recordingId;
-        const meetingId = recordingState.meetingId;
         const startTime = recordingState.startTime;
         const isLocalMode = recordingState.isLocalMode;
 
-        // Send message to content script to stop the MediaRecorder
+        const stoppedAt = new Date().toISOString();
+        const durationMs = Date.now() - startTime;
+        const durationSeconds = Math.round(durationMs / 1000);
+
+        // Send stop to content script
         try {
             await chrome.tabs.sendMessage(tabId, {
                 type: 'RECORDING_STOPPED',
@@ -189,7 +427,18 @@ async function handleStopRecording(data) {
             console.warn('Could not send stop message to content script:', error.message);
         }
 
-        // Wait for content script to finish uploading (up to 60s for large files)
+        // Get participant count from content script
+        let participantCount = 0;
+        try {
+            const resp = await chrome.tabs.sendMessage(tabId, { type: 'GET_PARTICIPANTS' });
+            if (resp && resp.participants) {
+                participantCount = resp.participants.length;
+            }
+        } catch (e) {
+            console.warn('Could not get participant count:', e.message);
+        }
+
+        // Wait for upload completion
         await new Promise((resolve) => {
             const timeout = setTimeout(() => {
                 console.warn('Upload completion timed out after 60s, proceeding');
@@ -209,11 +458,29 @@ async function handleStopRecording(data) {
             chrome.runtime.onMessage.addListener(listener);
         });
 
+        // Notify backend: recording stopped (if meeting is tracked)
+        const { currentMeetingUid } = await chrome.storage.local.get('currentMeetingUid');
+        if (currentMeetingUid) {
+            callBackendAPI('POST', '/api/ext/recording/stop', {
+                meeting_uid: currentMeetingUid,
+                stopped_at: stoppedAt,
+                duration: durationSeconds,
+                participant_count: participantCount
+            }).then(() => {
+                console.log('Backend notified: recording stopped');
+            }).catch(err => {
+                console.warn('Failed to notify backend of recording stop:', err.message);
+            });
+        }
+
         if (isLocalMode) {
             console.log('Local mode: Recording saved to Downloads folder');
         } else {
             console.log('Cloud mode: Recording uploaded to R2');
         }
+
+        // Store stopped_at for metadata step
+        await chrome.storage.local.set({ recordingStoppedAt: stoppedAt });
 
         // Reset recording state
         recordingState = {
@@ -239,110 +506,168 @@ async function handleStopRecording(data) {
     }
 }
 
-// Handle analytics data upload — sends to Cloudflare Worker (D1)
-async function handleAnalyticsUpload(data) {
+// ─── Post-Upload Metadata ──────────────────────────────────────────────────────
+
+async function handleUploadComplete(message) {
+    const recordingId = message.recordingId;
+    console.log('Upload complete for:', recordingId);
+
+    const { currentMeetingUid } = await chrome.storage.local.get('currentMeetingUid');
+    if (!currentMeetingUid) {
+        console.log('Untracked meeting — skipping metadata upload');
+        return;
+    }
+
+    // Wait a moment for participant data to arrive
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Get stored participant data and recording info
+    const stored = await chrome.storage.local.get([
+        'lastParticipantData',
+        'recordingStartTime',
+        'recordingStoppedAt'
+    ]);
+
+    const participantData = stored.lastParticipantData || {};
+    const startTime = stored.recordingStartTime;
+    const stoppedAt = stored.recordingStoppedAt;
+
+    // Calculate duration
+    let durationSeconds = 0;
+    if (startTime && stoppedAt) {
+        durationSeconds = Math.round(
+            (new Date(stoppedAt).getTime() - new Date(startTime).getTime()) / 1000
+        );
+    }
+
+    // Build participant_analytics keyed by display name
+    const participantAnalytics = {};
+    const participants = participantData.participants || participantData.snapshots?.[0]?.participants || [];
+    for (const p of participants) {
+        participantAnalytics[p.name] = {
+            join_time: p.joinTime,
+            leave_time: p.leaveTime || null,
+            camera_on_duration: Math.round((p.cameraOnDuration || 0) / 1000),
+            speaking_duration: calculateSpeakingDuration(p.speakingEvents || []),
+            was_muted: p.audioMuted || false
+        };
+    }
+
+    // Build R2 recording URL
+    const recordingUrl = CONFIG.R2_WORKER_URL
+        ? `${CONFIG.R2_WORKER_URL}/recordings/${recordingId}.webm`
+        : null;
+
     try {
-        if (!CONFIG.R2_WORKER_URL || !CONFIG.R2_API_KEY) {
-            console.log('Worker not configured, skipping analytics upload');
-            return { success: true, skipped: true };
-        }
-
-        const response = await fetch(`${CONFIG.R2_WORKER_URL}/analytics`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Key': CONFIG.R2_API_KEY
-            },
-            body: JSON.stringify(data)
+        await callBackendAPI('POST', '/api/ext/recording/metadata', {
+            meeting_uid: currentMeetingUid,
+            recording_url: recordingUrl,
+            recording_duration: durationSeconds,
+            participant_analytics: participantAnalytics
         });
-
-        if (!response.ok) {
-            throw new Error(`Analytics upload failed: ${response.status} ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        console.log('Analytics uploaded:', result);
-        return { success: true };
-
+        console.log('Recording metadata sent to backend');
     } catch (error) {
-        console.error('Error uploading analytics:', error);
-        // Don't throw - analytics upload failures shouldn't break the extension
-        return { success: false, error: error.message };
+        console.warn('Failed to send recording metadata:', error.message);
     }
+
+    // Clean up stored data
+    chrome.storage.local.remove(['recordingStartTime', 'recordingStoppedAt', 'lastParticipantData']);
 }
 
-// Handle participant data upload to R2
+/**
+ * Sum speaking durations from events array.
+ * Each event: { start: timestamp, end: timestamp } or { duration: seconds }
+ */
+function calculateSpeakingDuration(events) {
+    let totalSeconds = 0;
+    for (const evt of events) {
+        if (evt.duration) {
+            totalSeconds += evt.duration;
+        } else if (evt.start && evt.end) {
+            totalSeconds += Math.round((evt.end - evt.start) / 1000);
+        }
+    }
+    return totalSeconds;
+}
+
+// ─── Analytics Upload (D1 Worker only) ─────────────────────────────────────────
+
+async function handleAnalyticsUpload(data) {
+    const results = { worker: null };
+
+    // Send to Cloudflare Worker (D1)
+    if (CONFIG.R2_WORKER_URL && CONFIG.R2_API_KEY) {
+        try {
+            const response = await fetch(`${CONFIG.R2_WORKER_URL}/analytics`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': CONFIG.R2_API_KEY
+                },
+                body: JSON.stringify(data)
+            });
+
+            if (!response.ok) {
+                console.error(`Worker analytics upload failed: ${response.status}`);
+                results.worker = { success: false, status: response.status };
+            } else {
+                const result = await response.json();
+                console.log('Analytics uploaded to Worker:', result);
+                results.worker = { success: true };
+            }
+        } catch (error) {
+            console.error('Worker analytics error:', error.message);
+            results.worker = { success: false, error: error.message };
+        }
+    }
+
+    return { success: true, results };
+}
+
+// ─── Participant Data Upload (R2 only) ─────────────────────────────────────────
+
 async function handleParticipantDataUpload(data) {
-    if (!CONFIG.R2_WORKER_URL || !CONFIG.R2_API_KEY) {
-        console.log('R2 not configured, skipping participant data upload');
-        return { success: false, skipped: true };
-    }
+    const results = { worker: null };
 
-    const url = `${CONFIG.R2_WORKER_URL}/participant-data/${data.recordingId}.json`;
-    console.log('Uploading participant data to:', url);
+    // Store participant data for post-upload metadata
+    await chrome.storage.local.set({ lastParticipantData: data });
 
-    const response = await fetch(url, {
-        method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': CONFIG.R2_API_KEY
-        },
-        body: JSON.stringify(data)
-    });
+    // Upload to R2 via Worker
+    if (CONFIG.R2_WORKER_URL && CONFIG.R2_API_KEY) {
+        try {
+            const url = `${CONFIG.R2_WORKER_URL}/participant-data/${data.recordingId}.json`;
+            console.log('Uploading participant data to R2:', url);
 
-    if (!response.ok) {
-        throw new Error(`Participant data upload failed: ${response.status} ${response.statusText}`);
-    }
+            const response = await fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': CONFIG.R2_API_KEY
+                },
+                body: JSON.stringify(data)
+            });
 
-    const result = await response.json();
-    console.log('Participant data uploaded successfully:', result);
-    return { success: true, key: result.key };
-}
-
-// Handle meeting detection
-function handleMeetingDetected(data, tabId) {
-    console.log('Meeting detected:', data);
-
-    // Store meeting info
-    chrome.storage.local.set({
-        currentMeeting: {
-            meetingId: data.meetingId,
-            meetingTitle: data.meetingTitle,
-            startTime: Date.now(),
-            tabId: tabId
+            if (!response.ok) {
+                console.error(`R2 participant data upload failed: ${response.status}`);
+                results.worker = { success: false, status: response.status };
+            } else {
+                const result = await response.json();
+                console.log('Participant data uploaded to R2:', result);
+                results.worker = { success: true, key: result.key };
+            }
+        } catch (error) {
+            console.error('R2 participant data error:', error.message);
+            results.worker = { success: false, error: error.message };
         }
-    });
-
-    // Check if auto-start is enabled
-    chrome.storage.sync.get([CONFIG.STORAGE_KEYS.SETTINGS], (result) => {
-        const settings = result[CONFIG.STORAGE_KEYS.SETTINGS] || {};
-        if (settings.autoStart) {
-            // Auto-start recording
-            handleStartRecording({
-                meetingId: data.meetingId,
-                quality: settings.quality || CONFIG.RECORDING.DEFAULT_QUALITY
-            }, tabId);
-        }
-    });
-}
-
-// Handle meeting end
-function handleMeetingEnded(data) {
-    console.log('Meeting ended:', data);
-
-    // If recording is active, stop it
-    if (recordingState.isRecording) {
-        handleStopRecording(data);
     }
 
-    // Clear meeting info
-    chrome.storage.local.remove('currentMeeting');
+    return { success: true, results };
 }
 
-// Listen for tab updates to detect when user navigates away from Meet
+// ─── Tab Navigation Listener ───────────────────────────────────────────────────
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.url && recordingState.isRecording && recordingState.tabId === tabId) {
-        // User navigated away from Meet while recording
         if (!changeInfo.url.includes('meet.google.com')) {
             console.log('User left Meet, stopping recording');
             handleStopRecording({ reason: 'user_left_meeting' });
@@ -350,12 +675,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
 });
 
-// Listen for extension installation
+// ─── Extension Install ─────────────────────────────────────────────────────────
+
 chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'install') {
         console.log('Laneway extension installed');
-        // Open welcome page or setup
-        chrome.tabs.create({ url: 'popup/popup.html' });
+        chrome.tabs.create({ url: 'options.html' });
     }
 });
 

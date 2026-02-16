@@ -17,7 +17,7 @@
       </div>
       <div class="auth-status" id="auth-status">
         <span class="status-dot" id="status-dot"></span>
-        <span id="user-email">Not logged in</span>
+        <span id="user-email">Not configured</span>
       </div>
     </div>
 
@@ -29,46 +29,10 @@
           <div class="status-label">Meeting Status</div>
           <div class="status-value" id="meeting-status-text">No active meeting</div>
           <div class="meeting-title" id="meeting-title"></div>
+          <div class="tracking-badge" id="tracking-badge" style="display: none;"></div>
         </div>
       </div>
     </div>
-
-    <!-- User Guidance Section
-    <div class="guidance-section" id="guidance-section">
-      <div class="guidance-card">
-        <div class="guidance-header">
-          <span class="guidance-icon">📋</span>
-          <h3>How to Record</h3>
-        </div>
-        <ol class="guidance-steps">
-          <li id="step-1" class="step">
-            <span class="step-number">1</span>
-            <span class="step-text">Go to <strong>meet.google.com</strong> and join a meeting</span>
-          </li>
-          <li id="step-2" class="step">
-            <span class="step-number">2</span>
-            <span class="step-text">Click <strong>"Start Recording"</strong> below</span>
-          </li>
-          <li id="step-3" class="step">
-            <span class="step-number">3</span>
-            <span class="step-text">Select <strong>"Chrome Tab"</strong> in the popup</span>
-          </li>
-          <li id="step-4" class="step important">
-            <span class="step-number">4</span>
-            <span class="step-text">Check <strong>"Share tab audio"</strong> checkbox</span>
-          </li>
-          <li id="step-5" class="step">
-            <span class="step-number">5</span>
-            <span class="step-text">Click <strong>"Share"</strong> to start recording</span>
-          </li>
-        </ol>
-        <div class="guidance-note">
-          <span class="note-icon">💡</span>
-          <span>Recording saves to your Downloads folder automatically</span>
-        </div>
-      </div>
-    </div>-->
-  
 
     <!-- Recording Controls -->
     <div class="recording-section" id="recording-section">
@@ -116,102 +80,9 @@
       </div>
     </div>
 
-    <!-- Absence Notification -->
-    <div class="absence-section" id="absence-section" style="display: none;">
-      <div class="section-header">
-        <h3>Cannot Attend?</h3>
-        <p>Notify your team in advance</p>
-      </div>
-
-      <div class="form-group">
-        <label for="absence-type">Reason Type</label>
-        <select id="absence-type" class="select-input">
-          <option value="">Select reason type</option>
-          <option value="sick">🤒 Sick Leave</option>
-          <option value="vacation">🏖️ Vacation</option>
-          <option value="conflict">📅 Schedule Conflict</option>
-          <option value="emergency">🚨 Emergency</option>
-          <option value="other">📝 Other</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label for="absence-reason">Explanation</label>
-        <textarea 
-          id="absence-reason" 
-          class="textarea-input"
-          placeholder="Explain your absence (will be shown to team)..."
-          rows="3"
-        ></textarea>
-      </div>
-
-      <div class="form-group">
-        <label for="absence-duration">Duration</label>
-        <select id="absence-duration" class="select-input">
-          <option value="all_meeting">Entire Meeting</option>
-          <option value="first_30min">First 30 minutes</option>
-          <option value="joining_late">Joining Late</option>
-        </select>
-      </div>
-
-      <button class="btn btn-secondary" id="submit-absence-btn">
-        <span class="btn-icon">📨</span>
-        <span class="btn-text">Notify Team</span>
-      </button>
-
-      <div class="status-message" id="absence-status"></div>
-    </div>
-
-    <!-- Statistics -->
-    <div class="stats-section" id="stats-section">
-      <div class="section-header">
-        <h3>Your Stats</h3>
-      </div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-value" id="meetings-count">0</div>
-          <div class="stat-label">Meetings This Week</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="speaking-time">0m</div>
-          <div class="stat-label">Avg Speaking Time</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value" id="camera-usage">0%</div>
-          <div class="stat-label">Camera Usage</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Login Section (shown when not authenticated) -->
-    <div class="login-section" id="login-section" style="display: none;">
-      <div class="login-card">
-        <h2>Welcome to laneway bee</h2>
-        <p>Please log in to start recording meetings</p>
-        
-        <div class="form-group">
-          <label for="login-email">Email</label>
-          <input type="email" id="login-email" class="text-input" placeholder="your@email.com">
-        </div>
-        
-        <div class="form-group">
-          <label for="login-password">Password</label>
-          <input type="password" id="login-password" class="text-input" placeholder="••••••••">
-        </div>
-        
-        <button class="btn btn-primary" id="login-btn">
-          <span class="btn-text">Log In</span>
-        </button>
-        
-        <div class="status-message" id="login-status"></div>
-      </div>
-    </div>
-
     <!-- Footer -->
     <div class="footer">
-      <a href="https://automated-meeting-management-laneway.onrender.com" id="dashboard-link" class="footer-link">View Dashboard</a>
       <a href="#" id="settings-link" class="footer-link">Settings</a>
-      <a href="#" id="logout-link" class="footer-link">Logout</a>
     </div>
   </div>
 

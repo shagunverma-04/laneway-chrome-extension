@@ -213,6 +213,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 recordingId: null
             };
             chrome.storage.local.set({ recordingState });
+            // Revert meeting status from "live" back to "scheduled"
+            chrome.storage.local.get(['currentMeetingUid'], (result) => {
+                if (result.currentMeetingUid) {
+                    callBackendAPI('POST', '/api/ext/recording/cancel', {
+                        meeting_uid: result.currentMeetingUid
+                    }).then(() => {
+                        console.log('Meeting status reverted to scheduled');
+                    }).catch(err => console.warn('Could not revert meeting status:', err.message));
+                }
+            });
             sendResponse({ success: true });
             return false;
 

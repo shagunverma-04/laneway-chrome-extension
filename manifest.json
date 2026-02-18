@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Laneway Bee",
   "version": "1.0.1",
-  "description": "Automatically record Google Meet audio & video, upload to secure cloud storage, transcribe sessions, analyze content, and track participant engagement.",
+  "description": "Auto-record Google Meet audio & video, upload to cloud storage, transcribe sessions, analyze content, and track participant engagement.",
   "permissions": [
     "storage",
     "tabs",

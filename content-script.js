@@ -287,6 +287,8 @@ function updateParticipantList() {
         if (!meetingState.participants.has(participantId)) {
             // New participant joined
             const now = new Date();
+            const nowMs = Date.now();
+            const isMuted = isParticipantMuted(element);
             const participant = {
                 id: participantId,
                 name: name,
@@ -294,22 +296,20 @@ function updateParticipantList() {
                 joinTime: toKolkataISO(now),
                 leaveTime: null,
                 cameraOn: isParticipantCameraOn(element),
-                audioMuted: isParticipantMuted(element),
-                isSpeaking: false,
-                speakingStartTime: null,
+                audioMuted: isMuted,
+                // If already unmuted on join, start speaking session immediately
+                isSpeaking: !isMuted,
+                speakingStartTime: !isMuted ? nowMs : null,
                 speakingEvents: [],
                 cameraOnDuration: 0,
-                lastCameraCheck: Date.now()
+                lastCameraCheck: nowMs
             };
 
             meetingState.participants.set(participantId, participant);
-            console.log('Participant joined:', name, '(device:', deviceId + ')');
+            console.log('Participant joined:', name, '(device:', deviceId + ', muted:', isMuted + ')');
         } else {
-            // Update existing participant (lightweight — camera/speaking handled by dedicated interval)
+            // Only update leaveTime — audioMuted is owned by checkSpeakingAndCamera
             const participant = meetingState.participants.get(participantId);
-            participant.audioMuted = isParticipantMuted(element);
-
-            // Clear leaveTime if participant reappeared
             if (participant.leaveTime) {
                 participant.leaveTime = null;
                 console.log('Participant rejoined:', name, '(device:', deviceId + ')');
@@ -407,19 +407,6 @@ function isParticipantMuted(element) {
     return mutedIcon !== null;
 }
 
-// Check if participant is currently speaking
-function isParticipantSpeaking(element) {
-    // data attribute set by Google Meet
-    if (element.getAttribute('data-is-speaking') === 'true') return true;
-    if (element.querySelector('[data-is-speaking="true"]')) return true;
-    // aria-label variant
-    const ariaLabel = (element.getAttribute('aria-label') || '').toLowerCase();
-    if (ariaLabel.includes('speaking')) return true;
-    // Sound level indicator element (active border/ring)
-    if (element.querySelector('.speaking-indicator')) return true;
-    return false;
-}
-
 // Dedicated 500ms interval for speaking and camera duration tracking
 function checkSpeakingAndCamera() {
     if (!meetingState.isInMeeting) return;
@@ -438,22 +425,29 @@ function checkSpeakingAndCamera() {
         participant.cameraOn = cameraOn;
         participant.lastCameraCheck = now;
 
-        // Speaking events
-        const speaking = isParticipantSpeaking(element);
-        if (speaking && !participant.isSpeaking) {
-            participant.isSpeaking = true;
-            participant.speakingStartTime = now;
-        } else if (!speaking && participant.isSpeaking) {
-            const duration = Math.round((now - participant.speakingStartTime) / 1000);
-            if (duration > 0) {
-                participant.speakingEvents.push({
-                    start: participant.speakingStartTime,
-                    end: now,
-                    duration: duration
-                });
+        // Speaking events — driven by mic mute state transitions
+        const isMuted = isParticipantMuted(element);
+        if (participant.audioMuted !== isMuted) {
+            if (!isMuted) {
+                // Mic just unmuted → speaking started
+                participant.isSpeaking = true;
+                participant.speakingStartTime = now;
+            } else {
+                // Mic just muted → speaking ended
+                if (participant.isSpeaking && participant.speakingStartTime) {
+                    const duration = Math.round((now - participant.speakingStartTime) / 1000);
+                    if (duration > 0) {
+                        participant.speakingEvents.push({
+                            start: participant.speakingStartTime,
+                            end: now,
+                            duration: duration
+                        });
+                    }
+                }
+                participant.isSpeaking = false;
+                participant.speakingStartTime = null;
             }
-            participant.isSpeaking = false;
-            participant.speakingStartTime = null;
+            participant.audioMuted = isMuted;
         }
     }
 }

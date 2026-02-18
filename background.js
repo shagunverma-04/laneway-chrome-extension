@@ -4,7 +4,6 @@
 // Inline config (importScripts fails in MV3 after service worker restart)
 const CONFIG = {
   R2_WORKER_URL: 'https://laneway-r2-upload.laneway-r2-upload.workers.dev',
-  R2_API_KEY: 'Devlaneway@1234#',
   BACKEND_BASE_URL: 'https://laneway-meeting-management.onrender.com',
   RECORDING: {
     DEFAULT_QUALITY: 'audio-only',
@@ -363,12 +362,14 @@ async function handleStartRecording(data, tabId) {
         let uploadUrl = null;
         let isLocalMode = true;
 
-        if (CONFIG.R2_WORKER_URL && CONFIG.R2_API_KEY) {
+        const { laneway_r2_api_key: r2ApiKey } = await chrome.storage.sync.get('laneway_r2_api_key');
+
+        if (CONFIG.R2_WORKER_URL && r2ApiKey) {
             uploadUrl = `${CONFIG.R2_WORKER_URL}/recordings/${recordingId}.webm`;
             isLocalMode = false;
             console.log('Cloud mode: Will upload to R2 Worker');
         } else {
-            console.log('Local-only mode: R2 Worker not configured');
+            console.log('Local-only mode: R2 Worker API key not configured');
         }
 
         const startedAt = new Date().toISOString();
@@ -394,7 +395,7 @@ async function handleStartRecording(data, tabId) {
             type: 'RECORDING_STARTED',
             recordingId: recordingId,
             uploadUrl: uploadUrl,
-            apiKey: isLocalMode ? null : CONFIG.R2_API_KEY,
+            apiKey: isLocalMode ? null : r2ApiKey,
             quality: data.quality,
             isLocalMode: isLocalMode
         });
@@ -625,13 +626,14 @@ async function handleAnalyticsUpload(data) {
     const results = { worker: null };
 
     // Send to Cloudflare Worker (D1)
-    if (CONFIG.R2_WORKER_URL && CONFIG.R2_API_KEY) {
+    const { laneway_r2_api_key: r2ApiKey } = await chrome.storage.sync.get('laneway_r2_api_key');
+    if (CONFIG.R2_WORKER_URL && r2ApiKey) {
         try {
             const response = await fetch(`${CONFIG.R2_WORKER_URL}/analytics`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-API-Key': CONFIG.R2_API_KEY
+                    'X-API-Key': r2ApiKey
                 },
                 body: JSON.stringify(data)
             });

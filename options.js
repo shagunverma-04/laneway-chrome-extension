@@ -10,12 +10,14 @@ async function loadSettings() {
         const result = await chrome.storage.sync.get([
             'laneway_api_key',
             'laneway_base_url',
-            'laneway_default_quality'
+            'laneway_default_quality',
+            'laneway_r2_api_key'
         ]);
 
         document.getElementById('api-key').value = result.laneway_api_key || '';
         document.getElementById('backend-url').value = result.laneway_base_url || 'https://laneway-meeting-management.onrender.com';
         document.getElementById('default-quality').value = result.laneway_default_quality || 'audio-only';
+        document.getElementById('r2-api-key').value = result.laneway_r2_api_key || '';
 
         console.log('Settings loaded');
     } catch (error) {
@@ -30,6 +32,7 @@ async function saveSettings() {
         const apiKey = document.getElementById('api-key').value.trim();
         const baseUrl = document.getElementById('backend-url').value.trim();
         const defaultQuality = document.getElementById('default-quality').value;
+        const r2ApiKey = document.getElementById('r2-api-key').value.trim();
 
         // Validate URL if provided
         if (baseUrl) {
@@ -44,7 +47,8 @@ async function saveSettings() {
         await chrome.storage.sync.set({
             laneway_api_key: apiKey,
             laneway_base_url: baseUrl || 'https://laneway-meeting-management.onrender.com',
-            laneway_default_quality: defaultQuality
+            laneway_default_quality: defaultQuality,
+            laneway_r2_api_key: r2ApiKey
         });
 
         console.log('Settings saved');

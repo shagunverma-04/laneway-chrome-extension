@@ -5,7 +5,7 @@ const CONFIG = {
   R2_WORKER_URL: 'https://laneway-r2-upload.laneway-r2-upload.workers.dev',
 
   // Shared secret that matches the Worker's API_KEY secret
-  R2_API_KEY: 'Devlaneway@1234#',
+  R2_API_KEY: '', // Set via extension options page (Settings > R2 Worker API Key)
 
   // Default backend base URL (can be overridden in extension options)
   BACKEND_BASE_URL: 'http://localhost:8000',

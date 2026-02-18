@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Laneway Bee",
-  "version": "1.0.0",
-  "description": "Record Google Meet sessions with audio and video. Recordings are uploaded to secure cloud storage for transcription and analysis. Tracks participant engagement data.",
+  "version": "1.0.1",
+  "description": "Automatically record Google Meet audio & video, upload to secure cloud storage, transcribe sessions, analyze content, and track participant engagement.",
   "permissions": [
     "storage",
     "tabs",
@@ -33,16 +33,16 @@
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
-      "16": "icons/logo.png",
-      "48": "icons/logo.png",
-      "128": "icons/logo.png"
+      "16": "icons/honeycomb.png",
+      "48": "icons/honeycomb.png",
+      "128": "icons/honeycomb.png"
     }
   },
   "options_page": "options.html",
   "icons": {
-    "16": "icons/logo.png",
-    "48": "icons/logo.png",
-    "128": "icons/logo.png"
+    "16": "icons/honeycomb.png",
+    "48": "icons/honeycomb.png",
+    "128": "icons/honeycomb.png"
   },
   "web_accessible_resources": [
     {

@@ -1,7 +1,30 @@
 // Background Service Worker for Laneway Extension
 // Handles recording state, message passing, cloud uploads, and backend API integration
 
-importScripts('config.js');
+// Inline config (importScripts fails in MV3 after service worker restart)
+const CONFIG = {
+  R2_WORKER_URL: 'https://laneway-r2-upload.laneway-r2-upload.workers.dev',
+  R2_API_KEY: 'Devlaneway@1234#',
+  BACKEND_BASE_URL: 'https://laneway-meeting-management.onrender.com',
+  RECORDING: {
+    DEFAULT_QUALITY: 'audio-only',
+    CHUNK_DURATION: 5 * 60 * 1000,
+    AUTO_START: false,
+    TRACK_PARTICIPANTS: true
+  },
+  ANALYTICS: {
+    UPLOAD_INTERVAL: 30 * 1000,
+    TRACK_CAMERA: true,
+    TRACK_AUDIO: true,
+    TRACK_SPEAKING: true
+  },
+  STORAGE_KEYS: {
+    API_KEY: 'laneway_api_key',
+    BASE_URL: 'laneway_base_url',
+    SETTINGS: 'laneway_settings',
+    MEETING_DATA: 'laneway_meeting_data'
+  }
+};
 
 // Global state
 let recordingState = {
@@ -633,41 +656,11 @@ async function handleAnalyticsUpload(data) {
 // ─── Participant Data Upload (R2 only) ─────────────────────────────────────────
 
 async function handleParticipantDataUpload(data) {
-    const results = { worker: null };
-
-    // Store participant data for post-upload metadata
+    // Store participant data for the post-upload metadata flow (handleUploadComplete)
+    // R2 upload is handled directly by the content script to avoid service worker termination
     await chrome.storage.local.set({ lastParticipantData: data });
-
-    // Upload to R2 via Worker
-    if (CONFIG.R2_WORKER_URL && CONFIG.R2_API_KEY) {
-        try {
-            const url = `${CONFIG.R2_WORKER_URL}/participant-data/${data.recordingId}.json`;
-            console.log('Uploading participant data to R2:', url);
-
-            const response = await fetch(url, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': CONFIG.R2_API_KEY
-                },
-                body: JSON.stringify(data)
-            });
-
-            if (!response.ok) {
-                console.error(`R2 participant data upload failed: ${response.status}`);
-                results.worker = { success: false, status: response.status };
-            } else {
-                const result = await response.json();
-                console.log('Participant data uploaded to R2:', result);
-                results.worker = { success: true, key: result.key };
-            }
-        } catch (error) {
-            console.error('R2 participant data error:', error.message);
-            results.worker = { success: false, error: error.message };
-        }
-    }
-
-    return { success: true, results };
+    console.log('Participant data stored for metadata flow:', data.participants?.length, 'participants');
+    return { success: true };
 }
 
 // ─── Tab Navigation Listener ───────────────────────────────────────────────────

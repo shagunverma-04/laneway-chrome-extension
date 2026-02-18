@@ -14,7 +14,7 @@ async function loadSettings() {
         ]);
 
         document.getElementById('api-key').value = result.laneway_api_key || '';
-        document.getElementById('backend-url').value = result.laneway_base_url || 'http://localhost:8000';
+        document.getElementById('backend-url').value = result.laneway_base_url || 'https://laneway-meeting-management.onrender.com';
         document.getElementById('default-quality').value = result.laneway_default_quality || 'audio-only';
 
         console.log('Settings loaded');
@@ -43,7 +43,7 @@ async function saveSettings() {
 
         await chrome.storage.sync.set({
             laneway_api_key: apiKey,
-            laneway_base_url: baseUrl || 'http://localhost:8000',
+            laneway_base_url: baseUrl || 'https://laneway-meeting-management.onrender.com',
             laneway_default_quality: defaultQuality
         });
 
@@ -63,7 +63,7 @@ async function saveSettings() {
 // Test connection to backend
 async function testConnection() {
     const apiKey = document.getElementById('api-key').value.trim();
-    const baseUrl = document.getElementById('backend-url').value.trim() || 'http://localhost:8000';
+    const baseUrl = document.getElementById('backend-url').value.trim() || 'https://laneway-meeting-management.onrender.com';
 
     if (!apiKey) {
         showStatus('Please enter an API key first.', 'error');

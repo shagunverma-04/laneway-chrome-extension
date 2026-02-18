@@ -1,21 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "laneway bee",
+  "name": "Laneway Bee",
   "version": "1.0.0",
-  "description": "Record Google Meet sessions with audio and video. Download recordings locally for transcription and analysis.",
+  "description": "Record Google Meet sessions with audio and video. Recordings are uploaded to secure cloud storage for transcription and analysis. Tracks participant engagement data.",
   "permissions": [
-    "tabCapture",
     "storage",
     "tabs",
-    "activeTab",
-    "desktopCapture"
+    "activeTab"
   ],
   "host_permissions": [
     "https://meet.google.com/*",
-    "https://*.workers.dev/*",
-    "http://localhost:5000/*",
-    "http://localhost:8000/*",
-    "https://*.onrender.com/*"
+    "https://laneway-r2-upload.laneway-r2-upload.workers.dev/*",
+    "https://laneway-meeting-management.onrender.com/*"
   ],
   "background": {
     "service_worker": "background.js"

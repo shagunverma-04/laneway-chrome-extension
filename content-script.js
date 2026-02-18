@@ -33,10 +33,14 @@ let meetingState = {
     isInMeeting: false,
     participants: new Map(),
     analyticsInterval: null,
+    speakingInterval: null,
     recorder: null,
     isTracked: false,
     meetingUid: null
 };
+
+// R2 config passed from background via RECORDING_STARTED message
+let r2Config = { workerUrl: null, apiKey: null };
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
@@ -209,65 +213,109 @@ function setupParticipantObserver() {
     });
 }
 
+// Extract short device ID from full participant path
+// "spaces/df95N4C32M0B/devices/209" → "209"
+function extractDeviceId(fullId) {
+    if (!fullId) return null;
+    const match = fullId.match(/devices\/(\d+)/);
+    return match ? match[1] : fullId;
+}
+
+// Gather participants from all available DOM sources
+function findParticipantElements() {
+    const found = new Map(); // key: participantId, value: { name, element, deviceId }
+
+    // Strategy 1: Video grid tiles (data-participant-id)
+    document.querySelectorAll('[data-participant-id]').forEach(el => {
+        const fullId = el.getAttribute('data-participant-id');
+        const deviceId = extractDeviceId(fullId);
+        const name = extractParticipantName(el);
+        if (fullId && name) {
+            found.set(fullId, { name, element: el, deviceId: deviceId || fullId });
+        }
+    });
+
+    // Strategy 2: Requested participants
+    document.querySelectorAll('[data-requested-participant-id]').forEach(el => {
+        const fullId = el.getAttribute('data-requested-participant-id');
+        if (found.has(fullId)) return; // already found via strategy 1
+        const deviceId = extractDeviceId(fullId);
+        const name = extractParticipantName(el);
+        if (fullId && name) {
+            found.set(fullId, { name, element: el, deviceId: deviceId || fullId });
+        }
+    });
+
+    // Strategy 3: Self element
+    document.querySelectorAll('[data-self-name]').forEach(el => {
+        const selfName = el.getAttribute('data-self-name');
+        if (selfName && selfName.trim()) {
+            const name = selfName.trim().replace(' (You)', '');
+            const fullId = el.getAttribute('data-participant-id') ||
+                `self_${name.replace(/\s+/g, '_').toLowerCase()}`;
+            if (!found.has(fullId)) {
+                const deviceId = extractDeviceId(fullId) || fullId;
+                found.set(fullId, { name, element: el, deviceId });
+            }
+        }
+    });
+
+    // Strategy 4: Tiles with class oZRSLe (current Google Meet tile class)
+    document.querySelectorAll('div.oZRSLe[data-participant-id]').forEach(el => {
+        const fullId = el.getAttribute('data-participant-id');
+        if (found.has(fullId)) return;
+        const deviceId = extractDeviceId(fullId);
+        const name = extractParticipantName(el);
+        if (fullId && name) {
+            found.set(fullId, { name, element: el, deviceId: deviceId || fullId });
+        }
+    });
+
+    return found;
+}
+
 // Update participant list — also tracks leaveTime for participants no longer in DOM
 function updateParticipantList() {
-    const participantElements = document.querySelectorAll(
-        '[data-participant-id], [data-requested-participant-id], [data-self-name], [jsname="V3kXXb"]'
-    );
+    const found = findParticipantElements();
 
     // Collect currently visible participant IDs
     const visibleIds = new Set();
 
-    participantElements.forEach(element => {
-        const participantId = element.getAttribute('data-participant-id') ||
-            element.getAttribute('data-requested-participant-id') ||
-            generateParticipantId(element);
+    for (const [participantId, { name, element, deviceId }] of found) {
+        visibleIds.add(participantId);
 
-        const participantName = extractParticipantName(element);
+        if (!meetingState.participants.has(participantId)) {
+            // New participant joined
+            const now = new Date();
+            const participant = {
+                id: participantId,
+                name: name,
+                deviceId: deviceId,
+                joinTime: toKolkataISO(now),
+                leaveTime: null,
+                cameraOn: isParticipantCameraOn(element),
+                audioMuted: isParticipantMuted(element),
+                isSpeaking: false,
+                speakingStartTime: null,
+                speakingEvents: [],
+                cameraOnDuration: 0,
+                lastCameraCheck: Date.now()
+            };
 
-        if (participantId && participantName) {
-            visibleIds.add(participantId);
+            meetingState.participants.set(participantId, participant);
+            console.log('Participant joined:', name, '(device:', deviceId + ')');
+        } else {
+            // Update existing participant (lightweight — camera/speaking handled by dedicated interval)
+            const participant = meetingState.participants.get(participantId);
+            participant.audioMuted = isParticipantMuted(element);
 
-            if (!meetingState.participants.has(participantId)) {
-                // New participant joined
-                const now = new Date();
-                const participant = {
-                    id: participantId,
-                    name: participantName,
-                    joinTime: toKolkataISO(now),
-                    leaveTime: null,
-                    cameraOn: isParticipantCameraOn(element),
-                    audioMuted: isParticipantMuted(element),
-                    speakingEvents: [],
-                    cameraOnDuration: 0,
-                    lastCameraCheck: Date.now()
-                };
-
-                meetingState.participants.set(participantId, participant);
-                console.log('Participant joined:', participantName);
-            } else {
-                // Update existing participant
-                const participant = meetingState.participants.get(participantId);
-                const cameraOn = isParticipantCameraOn(element);
-
-                // Track camera duration
-                if (participant.cameraOn && cameraOn) {
-                    const duration = Date.now() - participant.lastCameraCheck;
-                    participant.cameraOnDuration += duration;
-                }
-
-                participant.cameraOn = cameraOn;
-                participant.audioMuted = isParticipantMuted(element);
-                participant.lastCameraCheck = Date.now();
-
-                // Clear leaveTime if participant reappeared
-                if (participant.leaveTime) {
-                    participant.leaveTime = null;
-                    console.log('Participant rejoined:', participantName);
-                }
+            // Clear leaveTime if participant reappeared
+            if (participant.leaveTime) {
+                participant.leaveTime = null;
+                console.log('Participant rejoined:', name, '(device:', deviceId + ')');
             }
         }
-    });
+    }
 
     // Mark participants no longer visible as left
     for (const [id, participant] of meetingState.participants) {
@@ -276,21 +324,31 @@ function updateParticipantList() {
             console.log('Participant left:', participant.name);
         }
     }
+
+    if (found.size > 0) {
+        console.log(`Participant scan: ${found.size} visible, ${meetingState.participants.size} total tracked`);
+    }
 }
 
 // Extract participant name from element
 function extractParticipantName(element) {
+    // 1. Check data-self-name attribute directly
     const selfName = element.getAttribute('data-self-name');
     if (selfName && selfName.trim()) {
         return selfName.trim().replace(' (You)', '');
     }
 
+    // 2. Check known name selectors (Google Meet changes these periodically)
     const nameSelectors = [
         '.zWGUib',
         '.cS7aqe',
         '.ZjFb7c',
+        '.XEazBc',
+        '.EY8ABd',
+        '.AEMEYe',
         '[data-self-name]',
-        'div[jsname="YheHge"]'
+        'div[jsname="YheHge"]',
+        'div[jsname="V3kXXb"]'
     ];
 
     for (const selector of nameSelectors) {
@@ -300,18 +358,31 @@ function extractParticipantName(element) {
             if (attrName && attrName.trim()) {
                 return attrName.trim().replace(' (You)', '');
             }
-            if (nameElement.textContent.trim()) {
-                return nameElement.textContent.trim().replace(' (You)', '');
+            const text = getDirectTextContent(nameElement);
+            if (text) {
+                return text.replace(' (You)', '');
             }
         }
     }
 
+    // 3. Check img alt text
     const img = element.querySelector('img[alt]');
     if (img) {
         const alt = img.getAttribute('alt');
         if (alt && alt.trim() && alt !== 'Avatar') {
             return alt.trim().replace(' (You)', '');
         }
+    }
+
+    // 4. Fallback: first line of innerText is the participant name in Google Meet
+    const firstLine = (element.innerText || '').split('\n')[0].trim();
+    // Filter out Google Material icon text and UI strings
+    const iconKeywords = ['zoom_in', 'zoom_out', 'open_in_full', 'close_fullscreen',
+        'more_vert', 'more_horiz', 'keep', 'push_pin', 'mic', 'mic_off',
+        'videocam', 'videocam_off', 'present_to_all', 'cancel_presentation'];
+    if (firstLine && firstLine.length >= 2 && firstLine.length <= 60 &&
+        !iconKeywords.includes(firstLine.toLowerCase())) {
+        return firstLine.replace(' (You)', '').replace(' (you)', '');
     }
 
     return null;
@@ -336,14 +407,72 @@ function isParticipantMuted(element) {
     return mutedIcon !== null;
 }
 
+// Check if participant is currently speaking
+function isParticipantSpeaking(element) {
+    // data attribute set by Google Meet
+    if (element.getAttribute('data-is-speaking') === 'true') return true;
+    if (element.querySelector('[data-is-speaking="true"]')) return true;
+    // aria-label variant
+    const ariaLabel = (element.getAttribute('aria-label') || '').toLowerCase();
+    if (ariaLabel.includes('speaking')) return true;
+    // Sound level indicator element (active border/ring)
+    if (element.querySelector('.speaking-indicator')) return true;
+    return false;
+}
+
+// Dedicated 500ms interval for speaking and camera duration tracking
+function checkSpeakingAndCamera() {
+    if (!meetingState.isInMeeting) return;
+    const found = findParticipantElements();
+    const now = Date.now();
+
+    for (const [participantId, { element }] of found) {
+        const participant = meetingState.participants.get(participantId);
+        if (!participant) continue;
+
+        // Camera duration
+        const cameraOn = isParticipantCameraOn(element);
+        if (participant.cameraOn && cameraOn) {
+            participant.cameraOnDuration += now - participant.lastCameraCheck;
+        }
+        participant.cameraOn = cameraOn;
+        participant.lastCameraCheck = now;
+
+        // Speaking events
+        const speaking = isParticipantSpeaking(element);
+        if (speaking && !participant.isSpeaking) {
+            participant.isSpeaking = true;
+            participant.speakingStartTime = now;
+        } else if (!speaking && participant.isSpeaking) {
+            const duration = Math.round((now - participant.speakingStartTime) / 1000);
+            if (duration > 0) {
+                participant.speakingEvents.push({
+                    start: participant.speakingStartTime,
+                    end: now,
+                    duration: duration
+                });
+            }
+            participant.isSpeaking = false;
+            participant.speakingStartTime = null;
+        }
+    }
+}
+
 // Start analytics tracking
 function startAnalyticsTracking() {
     if (meetingState.analyticsInterval) {
         clearInterval(meetingState.analyticsInterval);
     }
+    if (meetingState.speakingInterval) {
+        clearInterval(meetingState.speakingInterval);
+    }
 
     updateParticipantList();
 
+    // Fast interval for speaking + camera accuracy
+    meetingState.speakingInterval = setInterval(checkSpeakingAndCamera, 500);
+
+    // Slow interval for analytics upload
     meetingState.analyticsInterval = setInterval(() => {
         updateParticipantList();
         uploadAnalytics();
@@ -355,6 +484,7 @@ async function uploadAnalytics() {
     const participants = Array.from(meetingState.participants.values()).map(p => ({
         id: p.id,
         name: p.name,
+        deviceId: p.deviceId || p.id,
         joinTime: p.joinTime,
         leaveTime: p.leaveTime,
         cameraOn: p.cameraOn,
@@ -392,6 +522,27 @@ function handleMeetingEnd() {
         clearInterval(meetingState.analyticsInterval);
         meetingState.analyticsInterval = null;
     }
+    if (meetingState.speakingInterval) {
+        clearInterval(meetingState.speakingInterval);
+        meetingState.speakingInterval = null;
+    }
+
+    // Finalize any open speaking events
+    const endMs = Date.now();
+    for (const participant of meetingState.participants.values()) {
+        if (participant.isSpeaking && participant.speakingStartTime) {
+            const duration = Math.round((endMs - participant.speakingStartTime) / 1000);
+            if (duration > 0) {
+                participant.speakingEvents.push({
+                    start: participant.speakingStartTime,
+                    end: endMs,
+                    duration: duration
+                });
+            }
+            participant.isSpeaking = false;
+            participant.speakingStartTime = null;
+        }
+    }
 
     // Set leaveTime for all remaining participants
     const now = toKolkataISO(new Date());
@@ -405,6 +556,7 @@ function handleMeetingEnd() {
     lastParticipantSnapshot = Array.from(meetingState.participants.values()).map(p => ({
         id: p.id,
         name: p.name,
+        deviceId: p.deviceId || p.id,
         joinTime: p.joinTime,
         leaveTime: p.leaveTime,
         cameraOn: p.cameraOn,
@@ -501,6 +653,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const participants = Array.from(meetingState.participants.values()).map(p => ({
                 id: p.id,
                 name: p.name,
+                deviceId: p.deviceId || p.id,
                 joinTime: p.joinTime,
                 leaveTime: p.leaveTime,
                 cameraOn: p.cameraOn,
@@ -528,6 +681,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Handle recording started
 async function handleRecordingStarted(message) {
     console.log('Recording started:', message);
+
+    // Store R2 config for direct participant data upload from content script
+    if (message.uploadUrl && message.apiKey) {
+        r2Config.workerUrl = message.uploadUrl.replace(/\/recordings\/.*$/, '');
+        r2Config.apiKey = message.apiKey;
+    }
 
     try {
         const isAudioOnly = message.quality === 'audio-only';
@@ -758,11 +917,29 @@ function handleRecordingStopped(message) {
 function sendParticipantData(recordingId, duration) {
     // Set leaveTime for participants still present
     const now = toKolkataISO(new Date());
+    const nowMs = Date.now();
+
+    // Finalize any open speaking events before sending
+    for (const participant of meetingState.participants.values()) {
+        if (participant.isSpeaking && participant.speakingStartTime) {
+            const secs = Math.round((nowMs - participant.speakingStartTime) / 1000);
+            if (secs > 0) {
+                participant.speakingEvents.push({
+                    start: participant.speakingStartTime,
+                    end: nowMs,
+                    duration: secs
+                });
+            }
+            participant.isSpeaking = false;
+            participant.speakingStartTime = null;
+        }
+    }
 
     // Use live map first; fall back to snapshot if map was already cleared
     let participants = Array.from(meetingState.participants.values()).map(p => ({
         id: p.id,
         name: p.name,
+        deviceId: p.deviceId || p.id,
         joinTime: p.joinTime,
         leaveTime: p.leaveTime || now,
         cameraOn: p.cameraOn,
@@ -795,10 +972,31 @@ function sendParticipantData(recordingId, duration) {
 
     console.log('Sending participant data:', participants.length, 'participants');
 
+    // Upload participant JSON directly to R2 from content script (avoids service worker termination)
+    if (r2Config.workerUrl && r2Config.apiKey) {
+        const url = `${r2Config.workerUrl}/participant-data/${recordingId}.json`;
+        console.log('Uploading participant data to R2 from content script:', url);
+        fetch(url, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': r2Config.apiKey
+            },
+            body: JSON.stringify(payload)
+        }).then(res => {
+            if (res.ok) {
+                console.log('Participant data uploaded to R2 successfully');
+            } else {
+                console.error('Participant data R2 upload failed:', res.status);
+            }
+        }).catch(err => console.error('Participant data R2 upload error:', err.message));
+    }
+
+    // Also notify background to store for metadata flow
     chrome.runtime.sendMessage({
         type: 'PARTICIPANT_DATA',
         data: payload
-    }).catch(err => console.warn('Could not send participant data:', err.message));
+    }).catch(err => console.warn('Could not send participant data to background:', err.message));
 }
 
 // Meeting Recorder Class

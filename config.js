@@ -19,6 +19,7 @@ const CONFIG = {
   },
 
   // Analytics Settings
+  
   ANALYTICS: {
     UPLOAD_INTERVAL: 30 * 1000, // 30 seconds
     TRACK_CAMERA: true,
